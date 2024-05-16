@@ -225,7 +225,7 @@ trait R1CSConstraintBuilder<F: PrimeField> {
 
 #[cfg(test)]
 mod tests {
-    use crate::impl_auto_conversions;
+    use crate::{impl_auto_conversions, enum_range, input_enum_range};
 
     use super::*;
     use ark_bn254::Fr;
@@ -503,37 +503,123 @@ mod tests {
         assert!(constraint_is_sat(&constraint, &z));
     }
 
+    #[allow(non_camel_case_types)]
+    #[derive(EnumIter, EnumCount, Clone, Copy, Debug)]
+    #[repr(usize)]
+    enum JoltInputs {
+        PcIn,
+        PcOut,
+
+        Bytecode_A,
+        // Bytecode_V
+        Bytecode_Opcode,
+        Bytecode_RS1,
+        Bytecode_RS2,
+        Bytecode_RD,
+        Bytecode_Imm,
+
+        RAM_A,
+        // Ram_V
+        RAM_Read_RD,
+        RAM_Read_RS1,
+        RAM_Read_RS2,
+        RAM_Read_Byte0,
+        RAM_Read_Byte1,
+        RAM_Read_Byte2,
+        RAM_Read_Byte3,
+        RAM_Write_RD,
+        RAM_Write_Byte0,
+        RAM_Write_Byte1,
+        RAM_Write_Byte2,
+        RAM_Write_Byte3,
+
+        ChunksX_0,
+        ChunksX_1,
+        ChunksX_2,
+        ChunksX_3,
+
+        ChunksY_0,
+        ChunksY_1,
+        ChunksY_2,
+        ChunksY_3,
+
+        ChunksQ_0,
+        ChunksQ_1,
+        ChunksQ_2,
+        ChunksQ_3,
+
+        // TODO(sragss): Better names for first 2.
+        OpFlags0,
+        OpFlags1,
+        OpFlags_IsLoad,
+        OpFlags_IsStore,
+        OpFlags_IsJmp,
+        OpFlags_IsBranch,
+        OpFlags_LookupOutToRd,
+        OpFlags_SignImm,
+        OpFlags_IsConcat,
+
+        // Instruction Flags
+        IF_Add,
+        IF_Sub,
+        IF_And,
+        IF_Or,
+        IF_Xor,
+        IF_Lb,
+        IF_Lh,
+        IF_Sb,
+        IF_Sh,
+        IF_Sw,
+        IF_Beq,
+        IF_Bge,
+        IF_Bgeu,
+        IF_Bne,
+        IF_Slt,
+        IF_Sltu,
+        IF_Sll,
+        IF_Sra,
+        IF_Srl,
+    }
+    impl R1CSInputType for JoltInputs {}
+    impl_auto_conversions!(JoltInputs);
+
+    const PC_START_ADDRESS: i64 = 0x80000000;
+    const PC_NOOP_SHIFT: i64 = 4;
+    const MEMORY_START: i64 = 128; // TODO(sragss): Non constant.
+
+
     #[test]
     fn jolt() {
-        let mut builder = R1CSBuilder::<Fr, TestInputs>::new();
-
+        let mut builder = R1CSBuilder::<Fr, JoltInputs>::new();
 
         struct JoltConstraints();
         impl<F: PrimeField> R1CSConstraintBuilder<F> for JoltConstraints {
-            type Inputs = TestInputs;
-            fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
-                builder.constrain_binary(TestInputs::OpFlags0);
-                builder.constrain_binary(TestInputs::OpFlags1);
-                builder.constrain_binary(TestInputs::OpFlags2);
-                builder.constrain_binary(TestInputs::OpFlags3);
+            type Inputs = JoltInputs;
+            fn build_constraints(&self, cs: &mut R1CSBuilder<F, Self::Inputs>) {
+                let op_flag_inputs = input_enum_range!(JoltInputs::OpFlags0, JoltInputs::OpFlags_IsConcat);
+                for op_flag_input in op_flag_inputs {
+                    cs.constrain_binary(op_flag_input);
+                }
+                for instruction_flag_input in input_enum_range!(JoltInputs::IF_Add, JoltInputs::IF_Srl) {
+                    cs.constrain_binary(instruction_flag_input);
+                }
 
-                builder.constrain_eq(TestInputs::PcIn, TestInputs::BytecodeA);
+                cs.constrain_eq(JoltInputs::PcIn, JoltInputs::Bytecode_A);
 
-                builder.constrain_pack_be(vec![TestInputs::OpFlags0.into(), TestInputs::OpFlags1.into(), TestInputs::OpFlags2.into(), TestInputs::OpFlags3.into()], TestInputs::BytecodeVOpcode, 1);
+                cs.constrain_pack_be(op_flag_inputs.to_vec(), JoltInputs::Bytecode_Opcode, 1);
 
-                let packed_load_store = builder.allocate_pack_be(vec![TestInputs::RAMByte0.into(), TestInputs::RAMByte1.into(), TestInputs::RAMByte2.into(), TestInputs::RAMByte3.into()], 8);
+                let ram_writes = input_enum_range!(JoltInputs::RAM_Read_Byte0, JoltInputs::RAM_Read_Byte3);
+                let packed_load_store = cs.allocate_pack_be(ram_writes.to_vec(), 8);
 
-                let x = builder.allocate_if_else(TestInputs::OpFlags0, TestInputs::RAMRS1, TestInputs::PcIn); // TODO(sragss): LC for TestInptus::PcIn
-                let y = builder.allocate_if_else(TestInputs::OpFlags1, TestInputs::RAMRS2, TestInputs::BytecodeVImm);
+                let real_pc = LC::sum2(4i64 * JoltInputs::PcIn, PC_START_ADDRESS + PC_NOOP_SHIFT);
+                let x = cs.allocate_if_else(JoltInputs::OpFlags0, JoltInputs::RAM_Read_RS1, real_pc);
+                let y = cs.allocate_if_else(JoltInputs::OpFlags1, JoltInputs::RAM_Read_RS2, JoltInputs::Bytecode_Imm);
 
-                let signed_output = LC::sub2(TestInputs::BytecodeVImm, Term(Variable::Constant, 0xffffffffi64 - 1i64));
-                let imm_signed = builder.allocate_if_else(TestInputs::OpFlags_SignImm, TestInputs::BytecodeVImm, signed_output);
+                let signed_output = LC::sub2(JoltInputs::Bytecode_Imm, 0xffffffffi64 - 1i64);
+                let imm_signed = cs.allocate_if_else(JoltInputs::OpFlags_SignImm, JoltInputs::Bytecode_Imm, signed_output);
 
-                let memory_start = 128; // TODO(sragss): In Jolt this is passed as a function param.
-                let or_condition = LC::sum2(TestInputs::OpFlags0, TestInputs::OpFlags1);
-                builder.constrain_eq_conditional(or_condition, LC::sum2(TestInputs::RAMRS1, imm_signed), LC::sum2(TestInputs::RAMA, Term(Variable::Constant, memory_start)));
-
-
+                let or_condition = LC::sum2(JoltInputs::OpFlags0, JoltInputs::OpFlags1);
+                cs.constrain_eq_conditional(or_condition, LC::sum2(JoltInputs::RAM_Read_RS1, imm_signed), LC::sum2(JoltInputs::RAM_A, MEMORY_START));
 
             }
         }
@@ -639,6 +725,18 @@ impl<I: R1CSInputType> std::ops::Neg for Term<I> {
     }
 }
 
+impl<I: R1CSInputType> Into<Term<I>> for i64 {
+    fn into(self) -> Term<I> {
+        Term(Variable::Constant, self)
+    }
+}
+
+impl<I: R1CSInputType> Into<LC<I>> for i64 {
+    fn into(self) -> LC<I> {
+        LC(vec![Term(Variable::Constant, self)])
+    }
+}
+
 impl<I: R1CSInputType> Into<Term<I>> for Variable<I> {
     fn into(self) -> Term<I> {
         Term(self, 1)
@@ -699,40 +797,88 @@ impl<I: R1CSInputType> std::ops::Neg for LC<I> {
 #[macro_export]
 macro_rules! impl_auto_conversions {
     ($ConcreteInput:ty) => {
-        type ConcreteInput = $ConcreteInput;
-
-        impl Into<usize> for ConcreteInput {
+        impl Into<usize> for $ConcreteInput {
             fn into(self) -> usize {
                 self as usize
             }
         }
-        impl Into<Variable<ConcreteInput>> for ConcreteInput {
-            fn into(self) -> Variable<ConcreteInput> {
+        impl Into<Variable<$ConcreteInput>> for $ConcreteInput {
+            fn into(self) -> Variable<$ConcreteInput> {
                 Variable::Input(self)
             }
         }
 
-        impl Into<(Variable<ConcreteInput>, i64)> for ConcreteInput {
-            fn into(self) -> (Variable<ConcreteInput>, i64) {
+        impl Into<(Variable<$ConcreteInput>, i64)> for $ConcreteInput {
+            fn into(self) -> (Variable<$ConcreteInput>, i64) {
                 (Variable::Input(self), 1)
             }
         }
-        impl Into<Term<ConcreteInput>> for ConcreteInput {
-            fn into(self) -> Term<ConcreteInput> {
+        impl Into<Term<$ConcreteInput>> for $ConcreteInput {
+            fn into(self) -> Term<$ConcreteInput> {
                 Term(Variable::Input(self), 1)
             }
         }
 
-        impl Into<Term<ConcreteInput>> for (ConcreteInput, i64) {
-            fn into(self) -> Term<ConcreteInput> {
+        impl Into<Term<$ConcreteInput>> for ($ConcreteInput, i64) {
+            fn into(self) -> Term<$ConcreteInput> {
                 Term(Variable::Input(self.0), self.1)
             }
         }
 
-        impl Into<LC<ConcreteInput>> for ConcreteInput {
-            fn into(self) -> LC<ConcreteInput> {
+        impl Into<LC<$ConcreteInput>> for $ConcreteInput {
+            fn into(self) -> LC<$ConcreteInput> {
                 LC(vec![Term(Variable::Input(self), 1)])
             }
+        }
+
+        impl Into<LC<$ConcreteInput>> for Vec<$ConcreteInput> {
+            fn into(self) -> LC<$ConcreteInput> {
+                let terms: Vec<Term<$ConcreteInput>> = self.into_iter().map(Into::into).collect();
+                LC(terms)
+            }
+        }
+
+        impl std::ops::Mul<i64> for $ConcreteInput {
+            type Output = Term<$ConcreteInput>;
+
+            fn mul(self, rhs: i64) -> Self::Output {
+                Term(Variable::Input(self), rhs)
+            }
+        }
+
+        impl std::ops::Mul<$ConcreteInput> for i64 {
+            type Output = Term<$ConcreteInput>;
+
+            fn mul(self, rhs: $ConcreteInput) -> Self::Output {
+                Term(Variable::Input(rhs), self)
+            }
+        }
+        
+    };
+}
+
+#[macro_export]
+macro_rules! enum_range {
+    ($start:path, $end:path) => {
+        {
+            let mut arr = [$start; ($end as usize) - ($start as usize) + 1];
+            for i in ($start as usize)..=($end as usize) {
+                arr[i - ($start as usize)] = unsafe { std::mem::transmute::<usize, _>(i) };
+            }
+            arr
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! input_enum_range {
+    ($start:path, $end:path) => {
+        {
+            let mut arr = [Variable::Input($start); ($end as usize) - ($start as usize) + 1];
+            for i in ($start as usize)..=($end as usize) {
+                arr[i - ($start as usize)] = Variable::Input(unsafe { std::mem::transmute::<usize, _>(i) });
+            }
+            arr
         }
     };
 }
