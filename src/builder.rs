@@ -46,7 +46,7 @@ impl<I: R1CSInputType> Constraint<I> {
     pub fn eq(left: Variable<I>, right: Variable<I>) -> Self {
         // (left - right) * right = 0
         Self {
-            a: LC(vec![Term(left, 1), Term(right, -1)]),
+            a: Term(left, 1) - Term(right, 1),
             b: LC(vec![Term(Variable::Constant, 1)]),
             c: LC(vec![])
         }
@@ -100,10 +100,10 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
 
         // (left - right) * right == 0
         let a = left - right.clone();
-        let b = right.0;
+        let b = right.into();
         let constraint = Constraint {
             a,
-            b: LC(b),
+            b,
             c: LC(vec![])
         };
         println!("constraint {:?}", constraint);
@@ -410,6 +410,21 @@ impl<I: R1CSInputType> std::ops::Sub for LC<I> {
     }
 }
 
+impl<I: R1CSInputType> std::ops::Add for Term<I> {
+    type Output = LC<I>;
+
+    fn add(self, other: Self) -> Self::Output {
+        LC(vec![self, other])
+    }
+}
+
+impl<I: R1CSInputType> std::ops::Sub for Term<I> {
+    type Output = LC<I>;
+
+    fn sub(self, other: Self) -> Self::Output {
+        LC(vec![self, -other])
+    }
+}
 
 
 
