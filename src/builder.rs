@@ -35,9 +35,9 @@ enum Variable<I: R1CSInputType> {
 /// Constraints over a single row. Each variable points to a single item in Z and the corresponding coefficient.
 #[derive(Clone, Debug)]
 struct Constraint<I: R1CSInputType> {
-    a: Vec<Term<I>>,
-    b: Vec<Term<I>>,
-    c: Vec<Term<I>>,
+    a: LC<I>,
+    b: LC<I>,
+    c: LC<I>,
 }
 
 
@@ -46,41 +46,19 @@ impl<I: R1CSInputType> Constraint<I> {
     pub fn eq(left: Variable<I>, right: Variable<I>) -> Self {
         // (left - right) * right = 0
         Self {
-            a: vec![Term(left, 1), Term(right, -1)],
-            b: vec![Term(Variable::Constant, 1)],
-            c: vec![]
+            a: LC(vec![Term(left, 1), Term(right, -1)]),
+            b: LC(vec![Term(Variable::Constant, 1)]),
+            c: LC(vec![])
         }
     }
 
     pub fn binary(var: Variable<I>) -> Self {
         // var * (1 - var)
         Self {
-            a: vec![Term(var, 1)],
-            b: vec![Term(var, -1), Term(Variable::Constant, 1)],
-            c: vec![]
+            a: LC(vec![Term(var, 1)]),
+            b: LC(vec![Term(var, -1), Term(Variable::Constant, 1)]),
+            c: LC(vec![])
         }
-    }
-
-    pub fn if_else(condition: Variable<I>, true_outcome: Variable<I>, false_outcome: Variable<I>) -> (Self, Variable<I>) {
-        // result = condition * true_coutcome + (1 - condition) * false_outcome
-        // => condition * (true_outcome - false_outcome) = (result - false_outcome)
-
-        // TODO(sragss): How compute aux?
-        // - Return lambda -> fn(z: Vec<F>) -> F;
-        // - self.type = ConstraintType::IfElse
-        // - self.aux_type = AuxType::IfElse
-        // ..
-        // Push up to Builder level.
-
-        // TODO(sragss): How to do combined if else?
-        // true_outcome = 4 * Inputs::A + 1200  --- 1200 here is a constant.
-        let result = Variable::Auxiliary(0);
-        let constraint = Self {
-            a: vec![Term(condition, 1)],
-            b: vec![Term(true_outcome, 1), Term(false_outcome, -1)],
-            c: vec![Term(condition, 1), Term(result, -1)]
-        };
-        (constraint, result)
     }
 }
 
@@ -117,17 +95,17 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
         todo!("allocate constraints")
     }
 
-    fn constrain_eq(&mut self, left: impl Into<LinearCombination<I>>, right: impl Into<LinearCombination<I>>) {
-        let left: LinearCombination<I> = left.into();
-        let right: LinearCombination<I> = right.into();
+    fn constrain_eq(&mut self, left: impl Into<LC<I>>, right: impl Into<LC<I>>) {
+        let left: LC<I> = left.into();
+        let right: LC<I> = right.into();
 
         // (left - right) * right == 0
         let a = left - right.clone();
         let b = right.0;
         let constraint = Constraint {
-            a: a.0,
-            b,
-            c: vec![]
+            a,
+            b: LC(b),
+            c: LC(vec![])
         };
         println!("constraint {:?}", constraint);
         self.constraints.push(constraint);
@@ -135,27 +113,27 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
 
     fn constrain_if_else(
         &mut self, 
-        condition: impl Into<LinearCombination<I>>, 
-        result_true: impl Into<LinearCombination<I>>, 
-        result_false: impl Into<LinearCombination<I>>, 
-        alleged_result: impl Into<LinearCombination<I>>) {
-            let condition: LinearCombination<I> = condition.into();
-            let result_true: LinearCombination<I> = result_true.into();
-            let result_false: LinearCombination<I> = result_false.into();
-            let alleged_result: LinearCombination<I> = alleged_result.into();
+        condition: impl Into<LC<I>>, 
+        result_true: impl Into<LC<I>>, 
+        result_false: impl Into<LC<I>>, 
+        alleged_result: impl Into<LC<I>>) {
+            let condition: LC<I> = condition.into();
+            let result_true: LC<I> = result_true.into();
+            let result_false: LC<I> = result_false.into();
+            let alleged_result: LC<I> = alleged_result.into();
 
             // result = condition * true_coutcome + (1 - condition) * false_outcome
             // => condition * (true_outcome - false_outcome) = (result - false_outcome)
 
             let constraint = Constraint {
-                a: condition.0.clone(),
-                b: (result_true - result_false.clone()).0,
-                c: (alleged_result - result_false).0
+                a: condition.clone(),
+                b: (result_true - result_false.clone()),
+                c: (alleged_result - result_false)
             };
             self.constraints.push(constraint);
     }
 
-    fn allocate_if_else(&mut self, left: impl Into<LinearCombination<I>>, right: impl Into<LinearCombination<I>>) -> Variable<I> {
+    fn allocate_if_else(&mut self, left: impl Into<LC<I>>, right: impl Into<LC<I>>) -> Variable<I> {
         todo!()
     }
 }
@@ -186,10 +164,10 @@ impl<F: PrimeField> R1CSConstraintBuilder<F> for ConcreteConstraints {
         // builder should append aux computations directly.
 
         // LinearCombination(vec![(Variable::Input(Self::Inputs::PcOut), 1), (Variable::Input(Self::Inputs::PcIn), 1)]);
-        let left = LinearCombination::sum2(Self::Inputs::PcOut, Self::Inputs::PcOut);
-        let right = LinearCombination::sum2(Self::Inputs::PcOut, (Self::Inputs::PcOut, 2i64));
+        let left = LC::sum2(Self::Inputs::PcOut, Self::Inputs::PcOut);
+        let right = LC::sum2(Self::Inputs::PcOut, (Self::Inputs::PcOut, 2i64));
         builder.constrain_eq(left, right);
-        builder.constrain_eq(LinearCombination::sum2(Self::Inputs::PcOut, Variable::Auxiliary(1)), Self::Inputs::PcIn)
+        builder.constrain_eq(LC::sum2(Self::Inputs::PcOut, Variable::Auxiliary(1)), Self::Inputs::PcIn)
     }
 }
 
@@ -209,7 +187,7 @@ mod tests {
 
         let mut aux_set = std::collections::HashSet::new();
         for constraint in [&constraint.a, &constraint.b, &constraint.c] {
-            for Term(var, _value) in constraint {
+            for Term(var, _value) in &constraint.0 {
                 if let Variable::Auxiliary(aux) = var {
                     aux_set.insert(aux);
                 }
@@ -230,7 +208,7 @@ mod tests {
         let mut buckets = [&mut a, &mut b, &mut c];
         let constraints = [&constraint.a, &constraint.b, &constraint.c];
         for (bucket, constraint) in buckets.iter_mut().zip(constraints.iter()) {
-            for Term(var, coefficient) in constraint.iter() {
+            for Term(var, coefficient) in constraint.0.iter() {
                 match var {
                     Variable::Input(input) => {
                         let in_u: usize = (*input).into();
@@ -286,8 +264,8 @@ mod tests {
         impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
             type Inputs = TestInputs;
             fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
-                let left = LinearCombination::sum2(Self::Inputs::PcIn, Self::Inputs::PcOut);
-                let right = LinearCombination::sum2(Self::Inputs::BytecodeA, (Self::Inputs::BytecodeVOpcode, 2i64));
+                let left = LC::sum2(Self::Inputs::PcIn, Self::Inputs::PcOut);
+                let right = LC::sum2(Self::Inputs::BytecodeA, (Self::Inputs::BytecodeVOpcode, 2i64));
                 builder.constrain_eq(left, right);
             }
         }
@@ -367,34 +345,36 @@ mod tests {
 
 #[derive(Clone, Copy, Debug)]
 struct Term<I: R1CSInputType>(Variable<I>, i64);
-#[derive(Clone)]
-struct LinearCombination<I: R1CSInputType>(Vec<Term<I>>);
 
-impl<I: R1CSInputType> LinearCombination<I> {
+/// Linear combination.
+#[derive(Clone, Debug)]
+struct LC<I: R1CSInputType>(Vec<Term<I>>);
+
+impl<I: R1CSInputType> LC<I> {
     fn terms(&self) -> usize {
         self.0.len()
     }
 
     fn sum2(one: impl Into<Term<I>>, two: impl Into<Term<I>>) -> Self {
-        LinearCombination(vec![one.into(), two.into()])
+        LC(vec![one.into(), two.into()])
     }
 }
-impl<I: R1CSInputType> std::ops::Add for LinearCombination<I> {
+impl<I: R1CSInputType> std::ops::Add for LC<I> {
     type Output = Self;
 
     fn add(self, other: Self) -> Self::Output {
         let mut combined_terms = self.0;
         combined_terms.extend(other.0);
-        LinearCombination(combined_terms)
+        LC(combined_terms)
     }
 }
-impl<I: R1CSInputType> std::ops::Sub for LinearCombination<I> {
+impl<I: R1CSInputType> std::ops::Sub for LC<I> {
     type Output = Self;
 
     fn sub(self, other: Self) -> Self::Output {
         let mut combined_terms = self.0;
         combined_terms.extend((-other).0);
-        LinearCombination(combined_terms)
+        LC(combined_terms)
     }
 }
 
@@ -429,12 +409,24 @@ impl<I: R1CSInputType> Into<Term<I>> for (Variable<I>, i64) {
     }
 }
 
-impl<I: R1CSInputType> std::ops::Neg for LinearCombination<I> {
+impl<I: R1CSInputType> Into<LC<I>> for Term<I> {
+    fn into(self) -> LC<I> {
+        LC(vec![self])
+    }
+}
+
+impl<I: R1CSInputType> Into<LC<I>> for Variable<I> {
+    fn into(self) -> LC<I> {
+        LC(vec![Term(self, 1)])
+    }
+}
+
+impl<I: R1CSInputType> std::ops::Neg for LC<I> {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
         let neg_terms = self.0.into_iter().map(|term| -term).collect();
-        LinearCombination(neg_terms)
+        LC(neg_terms)
     }
 }
 
@@ -473,15 +465,9 @@ macro_rules! impl_auto_conversions {
             }
         }
 
-        impl Into<LinearCombination<ConcreteInput>> for Term<ConcreteInput> {
-            fn into(self) -> LinearCombination<ConcreteInput> {
-                LinearCombination(vec![self])
-            }
-        }
-
-        impl Into<LinearCombination<ConcreteInput>> for ConcreteInput {
-            fn into(self) -> LinearCombination<ConcreteInput> {
-                LinearCombination(vec![Term(Variable::Input(self), 1)])
+        impl Into<LC<ConcreteInput>> for ConcreteInput {
+            fn into(self) -> LC<ConcreteInput> {
+                LC(vec![Term(Variable::Input(self), 1)])
             }
         }
     };
