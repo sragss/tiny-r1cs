@@ -1,12 +1,12 @@
 use std::marker::PhantomData;
-
+use std::fmt::Debug;
 use ark_ff::PrimeField;
 use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount, EnumIter};
 
-pub trait R1CSInputType: Clone + Copy + IntoEnumIterator + EnumCount + Into<usize> {}
+pub trait R1CSInputType: Clone + Copy + Debug + IntoEnumIterator + EnumCount + Into<usize> {}
 
-#[derive(EnumIter, EnumCount, Clone, Copy)]
+#[derive(EnumIter, EnumCount, Clone, Copy, Debug)]
 #[repr(usize)]
 enum InputConfigPrimeField {
     PcIn,
@@ -33,10 +33,11 @@ enum Variable<I: R1CSInputType> {
 
 
 /// Constraints over a single row. Each variable points to a single item in Z and the corresponding coefficient.
+#[derive(Clone, Debug)]
 struct Constraint<I: R1CSInputType> {
-    a: Vec<(Variable<I>, i64)>,
-    b: Vec<(Variable<I>, i64)>,
-    c: Vec<(Variable<I>, i64)>,
+    a: Vec<Term<I>>,
+    b: Vec<Term<I>>,
+    c: Vec<Term<I>>,
 }
 
 
@@ -45,8 +46,8 @@ impl<I: R1CSInputType> Constraint<I> {
     pub fn eq(left: Variable<I>, right: Variable<I>) -> Self {
         // (left - right) * right = 0
         Self {
-            a: vec![(left, 1), (right, -1)],
-            b: vec![(right, 1)],
+            a: vec![Term(left, 1), Term(right, -1)],
+            b: vec![Term(right, 1)],
             c: vec![]
         }
     }
@@ -54,8 +55,8 @@ impl<I: R1CSInputType> Constraint<I> {
     pub fn binary(var: Variable<I>) -> Self {
         // var * (1 - var)
         Self {
-            a: vec![(var, 1)],
-            b: vec![(var, -1), (Variable::Constant, 1)],
+            a: vec![Term(var, 1)],
+            b: vec![Term(var, -1), Term(Variable::Constant, 1)],
             c: vec![]
         }
     }
@@ -75,9 +76,9 @@ impl<I: R1CSInputType> Constraint<I> {
         // true_outcome = 4 * Inputs::A + 1200  --- 1200 here is a constant.
         let result = Variable::Auxiliary(0);
         let constraint = Self {
-            a: vec![(condition, 1)],
-            b: vec![(true_outcome, 1), (false_outcome, -1)],
-            c: vec![(condition, 1), (result, -1)]
+            a: vec![Term(condition, 1)],
+            b: vec![Term(true_outcome, 1), Term(false_outcome, -1)],
+            c: vec![Term(condition, 1), Term(result, -1)]
         };
         (constraint, result)
     }
@@ -117,7 +118,19 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
     }
 
     fn constrain_eq(&mut self, left: impl Into<LinearCombination<I>>, right: impl Into<LinearCombination<I>>) {
-        todo!()
+        let left: LinearCombination<I> = left.into();
+        let right: LinearCombination<I> = right.into();
+
+        // (left - right) * right == 0
+        let a = left - right.clone();
+        let b = right.0;
+        let constraint = Constraint {
+            a: a.0,
+            b,
+            c: vec![]
+        };
+        println!("constraint {:?}", constraint);
+        self.constraints.push(constraint);
     }
 }
 
@@ -170,7 +183,7 @@ mod tests {
 
         let mut aux_set = std::collections::HashSet::new();
         for constraint in [&constraint.a, &constraint.b, &constraint.c] {
-            for (var, _value) in constraint {
+            for Term(var, _value) in constraint {
                 if let Variable::Auxiliary(aux) = var {
                     aux_set.insert(aux);
                 }
@@ -191,7 +204,7 @@ mod tests {
         let mut buckets = [&mut a, &mut b, &mut c];
         let constraints = [&constraint.a, &constraint.b, &constraint.c];
         for (bucket, constraint) in buckets.iter_mut().zip(constraints.iter()) {
-            for (var, coefficient) in constraint.iter() {
+            for Term(var, coefficient) in constraint.iter() {
                 match var {
                     Variable::Input(input) => {
                         let in_u: usize = (*input).into();
@@ -207,6 +220,7 @@ mod tests {
             }
         }
 
+        println!("a * b == c      {a} * {b} == {c}");
 
         a * b == c
     }
@@ -222,7 +236,7 @@ mod tests {
         assert!(!constraint_is_sat(&eq_constraint, &z));
     }
 
-    #[derive(EnumIter, EnumCount, Clone, Copy)]
+    #[derive(EnumIter, EnumCount, Clone, Copy, Debug)]
     #[repr(usize)]
     enum TestInputs {
         PcIn,
@@ -243,18 +257,33 @@ mod tests {
         // let concrete_constraints = ConcreteConstraints();
         // concrete_constraints.build_constraints(&mut builder);
 
+        // PcIn + PcOut == BytecodeA + 2 BytecodeVOpcode
         struct TestConstraints();
         impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
             type Inputs = TestInputs;
             fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
-                let left = LinearCombination::sum2(Self::Inputs::PcOut, Self::Inputs::PcOut);
-                let right = LinearCombination::sum2(Self::Inputs::PcOut, (Self::Inputs::PcOut, 2i64));
+                let left = LinearCombination::sum2(Self::Inputs::PcIn, Self::Inputs::PcOut);
+                let right = LinearCombination::sum2(Self::Inputs::BytecodeA, (Self::Inputs::BytecodeVOpcode, 2i64));
                 builder.constrain_eq(left, right);
             }
         }
 
         let concrete_constraints = TestConstraints();
         concrete_constraints.build_constraints(&mut builder);
+        assert!(builder.constraints.len() == 1);
+        let constraint = &builder.constraints[0];
+        let mut z = vec![0i64; TestInputs::COUNT];
+
+        // 2 + 6 == 6 + 2*1
+        z[TestInputs::PcIn as usize] = 2;
+        z[TestInputs::PcOut as usize] = 6;
+        z[TestInputs::BytecodeA as usize] = 6;
+        z[TestInputs::BytecodeVOpcode as usize] = 1;
+        assert!(constraint_is_sat(&constraint, &z));
+
+        // 2 + 6 != 6 + 2*2
+        z[TestInputs::BytecodeVOpcode as usize] = 2;
+        assert!(!constraint_is_sat(&constraint, &z));
     }
 }
 
@@ -275,38 +304,55 @@ mod tests {
 
 
 
+#[derive(Clone, Copy, Debug)]
 struct Term<I: R1CSInputType>(Variable<I>, i64);
+#[derive(Clone)]
 struct LinearCombination<I: R1CSInputType>(Vec<Term<I>>);
 
 impl<I: R1CSInputType> LinearCombination<I> {
+    fn terms(&self) -> usize {
+        self.0.len()
+    }
+
     fn sum2(one: impl Into<Term<I>>, two: impl Into<Term<I>>) -> Self {
         LinearCombination(vec![one.into(), two.into()])
     }
 }
+impl<I: R1CSInputType> std::ops::Add for LinearCombination<I> {
+    type Output = Self;
 
-
-
-
-
-
-
-
-
-
-
-trait LinearCombo<I: R1CSInputType> {
-	fn into_linear_combo(self) -> Vec<(Variable<I>, i64)>;
+    fn add(self, other: Self) -> Self::Output {
+        let mut combined_terms = self.0;
+        combined_terms.extend(other.0);
+        LinearCombination(combined_terms)
+    }
 }
+impl<I: R1CSInputType> std::ops::Sub for LinearCombination<I> {
+    type Output = Self;
 
-impl<I: R1CSInputType> LinearCombo<I> for Variable<I> {
-	fn into_linear_combo(self) -> Vec<(Variable<I>, i64)> {
-        vec![(self, 1)]
+    fn sub(self, other: Self) -> Self::Output {
+        let mut combined_terms = self.0;
+        combined_terms.extend((-other).0);
+        LinearCombination(combined_terms)
     }
 }
 
-impl<I: R1CSInputType> LinearCombo<I> for LinearCombination<I> {
-    fn into_linear_combo(self) -> Vec<(Variable<I>, i64)> {
-        todo!();
+
+
+
+
+
+
+
+
+
+
+
+impl<I: R1CSInputType> std::ops::Neg for Term<I> {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Term(self.0, self.1 * -1)
     }
 }
 
@@ -321,6 +367,16 @@ impl<I: R1CSInputType> Into<Term<I>> for (Variable<I>, i64) {
         Term(self.0, self.1)
     }
 }
+
+impl<I: R1CSInputType> std::ops::Neg for LinearCombination<I> {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        let neg_terms = self.0.into_iter().map(|term| -term).collect();
+        LinearCombination(neg_terms)
+    }
+}
+
 
 // For each R1CS config, these need to be written concretely for the R1CSInputType
 #[macro_export]
