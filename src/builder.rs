@@ -64,7 +64,6 @@ impl<I: R1CSInputType> Constraint<I> {
 
 
 
-// TODO: Can I check whether a Constraint is_sat on it's own or do I depend on materializing first.
 
 
 
@@ -133,8 +132,13 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
             self.constraints.push(constraint);
     }
 
-    fn allocate_if_else(&mut self, left: impl Into<LC<I>>, right: impl Into<LC<I>>) -> Variable<I> {
-        todo!()
+    #[must_use]
+    fn allocate_if_else(&mut self, condition: impl Into<LC<I>>, result_true: impl Into<LC<I>>, result_false: impl Into<LC<I>>) -> Variable<I> {
+        let result = Variable::Auxiliary(self.next_aux);
+        self.next_aux += 1;
+
+        self.constrain_if_else(condition, result_true, result_false, result);
+        result
     }
 }
 
@@ -148,29 +152,6 @@ trait R1CSConstraintBuilder<F: PrimeField> {
 
     fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>);
 }
-
-struct ConcreteConstraints();
-impl<F: PrimeField> R1CSConstraintBuilder<F> for ConcreteConstraints {
-    type Inputs = InputConfigPrimeField;
-    fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
-        // builder.constrain_binary(InputConfigPrimeField::OpFlags_0);
-        // builder.constrain_binary(InputConfigPrimeField::OpFlags_1);
-        // ... 
-        // builder.constrain_binary(InputConfigPrimeField::OpFlags_12);
-
-
-        // TODO(sragss): Try to write out the API I'd actually want for this.
-        // Build constraints
-        // builder should append aux computations directly.
-
-        // LinearCombination(vec![(Variable::Input(Self::Inputs::PcOut), 1), (Variable::Input(Self::Inputs::PcIn), 1)]);
-        let left = LC::sum2(Self::Inputs::PcOut, Self::Inputs::PcOut);
-        let right = LC::sum2(Self::Inputs::PcOut, (Self::Inputs::PcOut, 2i64));
-        builder.constrain_eq(left, right);
-        builder.constrain_eq(LC::sum2(Self::Inputs::PcOut, Variable::Auxiliary(1)), Self::Inputs::PcIn)
-    }
-}
-
 
 
 #[cfg(test)]
@@ -323,6 +304,57 @@ mod tests {
         assert!(!constraint_is_sat(&constraint, &z));
         z[TestInputs::BytecodeA as usize] = 10;
         assert!(constraint_is_sat(&constraint, &z));
+    }
+
+    #[test]
+    fn alloc_if_else_builder() {
+        let mut builder = R1CSBuilder::<Fr, TestInputs>::new();
+
+        // condition * (true_outcome - false_outcome) = (result - false_outcome)
+        // PcIn * (BytecodeVRS1 - BytecodeVRS2) == AUX_RESULT - BytecodeVRS2 
+        // If PcIn == 1: AUX_RESULT = BytecodeVRS1
+        // If PcIn == 0: AUX_RESULT = BytecodeVRS2
+        // AUX_RESULT == BytecodeVImm
+        struct TestConstraints();
+        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+            type Inputs = TestInputs;
+            fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
+                let condition = Self::Inputs::PcIn;
+                let true_outcome = Self::Inputs::BytecodeVRS1;
+                let false_outcome = Self::Inputs::BytecodeVRS2;
+                let branch_result = builder.allocate_if_else(condition, true_outcome, false_outcome);
+                builder.constrain_eq(branch_result, Self::Inputs::BytecodeVImm);
+            }
+        }
+
+        let concrete_constraints = TestConstraints();
+        concrete_constraints.build_constraints(&mut builder);
+        assert!(builder.constraints.len() == 2);
+        let (branch_constraint,  eq_constraint) = (&builder.constraints[0], & builder.constraints[1]);
+
+        let mut z = vec![0i64; TestInputs::COUNT + 1]; // 1 aux
+        let true_branch_result: i64 = 12;
+        let false_branch_result: i64 = 10;
+        let aux_index = TestInputs::COUNT as usize;
+        z[TestInputs::PcIn as usize] = 1;
+        z[TestInputs::BytecodeVRS1 as usize] = true_branch_result;
+        z[TestInputs::BytecodeVRS2 as usize] = false_branch_result;
+        z[TestInputs::BytecodeVImm as usize] =  true_branch_result;
+        z[aux_index] = true_branch_result;
+        assert!(constraint_is_sat(&branch_constraint, &z));
+        assert!(constraint_is_sat(&eq_constraint, &z));
+
+        z[aux_index] = false_branch_result;
+        assert!(!constraint_is_sat(&branch_constraint, &z));
+        assert!(!constraint_is_sat(&eq_constraint, &z));
+
+        z[TestInputs::BytecodeVImm as usize] = false_branch_result;
+        assert!(!constraint_is_sat(&branch_constraint, &z));
+        assert!(constraint_is_sat(&eq_constraint, &z));
+
+        z[TestInputs::PcIn as usize] = 0;
+        assert!(constraint_is_sat(&branch_constraint, &z));
+        assert!(constraint_is_sat(&eq_constraint, &z));
     }
 }
 
