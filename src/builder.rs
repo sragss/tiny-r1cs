@@ -98,9 +98,8 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
         let left: LC<I> = left.into();
         let right: LC<I> = right.into();
 
-        // (left - right) * right == 0
         let a = left - right.clone();
-        let b = right.into();
+        let b = Variable::Constant.into();
         let constraint = Constraint {
             a,
             b,
@@ -121,8 +120,8 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
             let result_false: LC<I> = result_false.into();
             let alleged_result: LC<I> = alleged_result.into();
 
-            // result = condition * true_coutcome + (1 - condition) * false_outcome
-            // => condition * (true_outcome - false_outcome) = (result - false_outcome)
+            // result == condition * true_coutcome + (1 - condition) * false_outcome
+            // simplify to single mul, single constraint => condition * (true_outcome - false_outcome) == (result - false_outcome)
 
             let constraint = Constraint {
                 a: condition.clone(),
@@ -138,6 +137,48 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
         self.next_aux += 1;
 
         self.constrain_if_else(condition, result_true, result_false, result);
+        result
+    }
+
+    // TODO(sragss): Technically we could use unpacked: Vec<LC<I>> here easily, but it feels like it would confuse the API.
+    fn constrain_pack_le(
+        &mut self,
+        unpacked: Vec<Variable<I>>,
+        result: impl Into<LC<I>>
+    ) {
+        // Pack unpacked via a simple weighted linear combination
+        // A + 2 * B + 4 * C + 8 * D, ...
+        let packed: Vec<Term<I>> = unpacked.into_iter().enumerate().map(|(idx, unpacked)| Term(unpacked, 1 << idx)).collect();
+        self.constrain_eq(packed, result);
+    }
+
+    #[must_use]
+    fn allocate_pack_le(&mut self, unpacked: Vec<Variable<I>>) -> Variable<I> {
+        let result = Variable::Auxiliary(self.next_aux);
+        self.next_aux += 1;
+
+        self.constrain_pack_le(unpacked, result);
+        result
+    }
+
+    fn constrain_pack_be(
+        &mut self,
+        unpacked: Vec<Variable<I>>,
+        result: impl Into<LC<I>>
+    ) {
+        // Pack unpacked via a simple weighted linear combination
+        // A + 2 * B + 4 * C + 8 * D, ...
+        // Note: Packing order is reversed from constrain_pack_le
+        let packed: Vec<Term<I>> = unpacked.into_iter().rev().enumerate().map(|(idx, unpacked)| Term(unpacked, 1 << idx)).collect();
+        self.constrain_eq(packed, result);
+    }
+
+    #[must_use]
+    fn allocate_pack_be(&mut self, unpacked: Vec<Variable<I>>) -> Variable<I> {
+        let result = Variable::Auxiliary(self.next_aux);
+        self.next_aux += 1;
+
+        self.constrain_pack_be(unpacked, result);
         result
     }
 }
@@ -231,7 +272,11 @@ mod tests {
         BytecodeVRS1,
         BytecodeVRS2,
         BytecodeVRD,
-        BytecodeVImm
+        BytecodeVImm,
+        OpFlags0,
+        OpFlags1,
+        OpFlags2,
+        OpFlags3,
     }
     impl R1CSInputType for TestInputs {}
     impl_auto_conversions!(TestInputs);
@@ -329,7 +374,7 @@ mod tests {
 
         let concrete_constraints = TestConstraints();
         concrete_constraints.build_constraints(&mut builder);
-        assert!(builder.constraints.len() == 2);
+        assert_eq!(builder.constraints.len(), 2);
         let (branch_constraint,  eq_constraint) = (&builder.constraints[0], & builder.constraints[1]);
 
         let mut z = vec![0i64; TestInputs::COUNT + 1]; // 1 aux
@@ -355,6 +400,70 @@ mod tests {
         z[TestInputs::PcIn as usize] = 0;
         assert!(constraint_is_sat(&branch_constraint, &z));
         assert!(constraint_is_sat(&eq_constraint, &z));
+    }
+
+    #[test]
+    fn packing_le_builder() {
+        let mut builder = R1CSBuilder::<Fr, TestInputs>::new();
+
+        // pack_le(OpFlags0, OpFlags1, OpFlags2, OpFlags3) == BytecodeA
+        struct TestConstraints();
+        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+            type Inputs = TestInputs;
+            fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
+                let result = Variable::Input(TestInputs::BytecodeA);
+                let unpacked: Vec<Variable<TestInputs>> = vec![TestInputs::OpFlags0.into(), TestInputs::OpFlags1.into(), TestInputs::OpFlags2.into(), TestInputs::OpFlags3.into()];
+                builder.constrain_pack_le(unpacked, result);
+            }
+        }
+
+        let concrete_constraints = TestConstraints();
+        concrete_constraints.build_constraints(&mut builder);
+        assert_eq!(builder.constraints.len(), 1);
+        let constraint = &builder.constraints[0];
+
+        // 1101 == 13
+        let mut z = vec![0i64; TestInputs::COUNT];
+        // (little endian)
+        z[TestInputs::OpFlags0 as usize] = 1;
+        z[TestInputs::OpFlags1 as usize] = 0;
+        z[TestInputs::OpFlags2 as usize] = 1;
+        z[TestInputs::OpFlags3 as usize] = 1;
+        z[TestInputs::BytecodeA as usize] = 13;
+
+        assert!(constraint_is_sat(&constraint, &z));
+    }
+
+    #[test]
+    fn packing_be_builder() {
+        let mut builder = R1CSBuilder::<Fr, TestInputs>::new();
+
+        // pack_le(OpFlags0, OpFlags1, OpFlags2, OpFlags3) == BytecodeA
+        struct TestConstraints();
+        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+            type Inputs = TestInputs;
+            fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
+                let result = Variable::Input(TestInputs::BytecodeA);
+                let unpacked: Vec<Variable<TestInputs>> = vec![TestInputs::OpFlags0.into(), TestInputs::OpFlags1.into(), TestInputs::OpFlags2.into(), TestInputs::OpFlags3.into()];
+                builder.constrain_pack_be(unpacked, result);
+            }
+        }
+
+        let concrete_constraints = TestConstraints();
+        concrete_constraints.build_constraints(&mut builder);
+        assert_eq!(builder.constraints.len(), 1);
+        let constraint = &builder.constraints[0];
+
+        // 1101 == 13
+        let mut z = vec![0i64; TestInputs::COUNT];
+        // (big endian)
+        z[TestInputs::OpFlags0 as usize] = 1;
+        z[TestInputs::OpFlags1 as usize] = 1;
+        z[TestInputs::OpFlags2 as usize] = 0;
+        z[TestInputs::OpFlags3 as usize] = 1;
+        z[TestInputs::BytecodeA as usize] = 13;
+
+        assert!(constraint_is_sat(&constraint, &z));
     }
 }
 
@@ -456,17 +565,24 @@ impl<I: R1CSInputType> Into<Term<I>> for (Variable<I>, i64) {
     }
 }
 
+impl<I: R1CSInputType> Into<LC<I>> for Variable<I> {
+    fn into(self) -> LC<I> {
+        LC(vec![Term(self, 1)])
+    }
+}
+
 impl<I: R1CSInputType> Into<LC<I>> for Term<I> {
     fn into(self) -> LC<I> {
         LC(vec![self])
     }
 }
 
-impl<I: R1CSInputType> Into<LC<I>> for Variable<I> {
+impl<I: R1CSInputType> Into<LC<I>> for Vec<Term<I>> {
     fn into(self) -> LC<I> {
-        LC(vec![Term(self, 1)])
+        LC(self)
     }
 }
+
 
 impl<I: R1CSInputType> std::ops::Neg for LC<I> {
     type Output = Self;
