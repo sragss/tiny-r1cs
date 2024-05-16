@@ -23,7 +23,7 @@ impl<I: R1CSInputType> Constraint<I> {
         // (left - right) * right = 0
         Self {
             a: vec![(left, 1), (right, -1)],
-            b: vec![(right, 1)],
+            b: vec![(Variable::Constant, 1)],
             c: vec![]
         }
     }
@@ -39,6 +39,7 @@ impl<I: R1CSInputType> Constraint<I> {
 
     pub fn if_else(condition: Variable<I>, true_outcome: Variable<I>, false_outcome: Variable<I>) -> (Self, Variable<I>) {
         // result = condition * true_coutcome + (1 - condition) * false_outcome
+        // result - false_outcome = condition * true_outcome - condition * false_outcome
         // => condition * (true_outcome - false_outcome) = (result - false_outcome)
 
         // TODO(sragss): How compute aux?

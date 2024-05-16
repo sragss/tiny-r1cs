@@ -47,7 +47,7 @@ impl<I: R1CSInputType> Constraint<I> {
         // (left - right) * right = 0
         Self {
             a: vec![Term(left, 1), Term(right, -1)],
-            b: vec![Term(right, 1)],
+            b: vec![Term(Variable::Constant, 1)],
             c: vec![]
         }
     }
@@ -131,6 +131,32 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
         };
         println!("constraint {:?}", constraint);
         self.constraints.push(constraint);
+    }
+
+    fn constrain_if_else(
+        &mut self, 
+        condition: impl Into<LinearCombination<I>>, 
+        result_true: impl Into<LinearCombination<I>>, 
+        result_false: impl Into<LinearCombination<I>>, 
+        alleged_result: impl Into<LinearCombination<I>>) {
+            let condition: LinearCombination<I> = condition.into();
+            let result_true: LinearCombination<I> = result_true.into();
+            let result_false: LinearCombination<I> = result_false.into();
+            let alleged_result: LinearCombination<I> = alleged_result.into();
+
+            // result = condition * true_coutcome + (1 - condition) * false_outcome
+            // => condition * (true_outcome - false_outcome) = (result - false_outcome)
+
+            let constraint = Constraint {
+                a: condition.0.clone(),
+                b: (result_true - result_false.clone()).0,
+                c: (alleged_result - result_false).0
+            };
+            self.constraints.push(constraint);
+    }
+
+    fn allocate_if_else(&mut self, left: impl Into<LinearCombination<I>>, right: impl Into<LinearCombination<I>>) -> Variable<I> {
+        todo!()
     }
 }
 
@@ -243,19 +269,17 @@ mod tests {
         PcOut,
         BytecodeA,
         BytecodeVOpcode,
-        BytecodeVRs1,
-        BytecodeVRs2,
-        BytecodeVRd,
+        BytecodeVRS1,
+        BytecodeVRS2,
+        BytecodeVRD,
         BytecodeVImm
     }
     impl R1CSInputType for TestInputs {}
     impl_auto_conversions!(TestInputs);
 
     #[test]
-    fn builder() {
+    fn eq_builder() {
         let mut builder = R1CSBuilder::<Fr, TestInputs>::new();
-        // let concrete_constraints = ConcreteConstraints();
-        // concrete_constraints.build_constraints(&mut builder);
 
         // PcIn + PcOut == BytecodeA + 2 BytecodeVOpcode
         struct TestConstraints();
@@ -284,6 +308,43 @@ mod tests {
         // 2 + 6 != 6 + 2*2
         z[TestInputs::BytecodeVOpcode as usize] = 2;
         assert!(!constraint_is_sat(&constraint, &z));
+    }
+
+    #[test]
+    fn if_else_builder() {
+        let mut builder = R1CSBuilder::<Fr, TestInputs>::new();
+
+        // condition * (true_outcome - false_outcome) = (result - false_outcome)
+        // PcIn * (BytecodeVRS1 - BytecodeVRS2) == BytecodeA - BytecodeVRS2 
+        // If PcIn == 1: BytecodeA = BytecodeVRS1
+        // If PcIn == 0: BytecodeA = BytecodeVRS2
+        struct TestConstraints();
+        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+            type Inputs = TestInputs;
+            fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
+                let condition = Self::Inputs::PcIn;
+                let true_outcome = Self::Inputs::BytecodeVRS1;
+                let false_outcome = Self::Inputs::BytecodeVRS2;
+                let alleged_result = Self::Inputs::BytecodeA;
+                builder.constrain_if_else(condition, true_outcome, false_outcome, alleged_result);
+            }
+        }
+
+        let concrete_constraints = TestConstraints();
+        concrete_constraints.build_constraints(&mut builder);
+        assert!(builder.constraints.len() == 1);
+        let constraint = &builder.constraints[0];
+
+        let mut z = vec![0i64; TestInputs::COUNT];
+        z[TestInputs::PcIn as usize] = 1;
+        z[TestInputs::BytecodeA as usize] = 6;
+        z[TestInputs::BytecodeVRS1 as usize] = 6;
+        z[TestInputs::BytecodeVRS2 as usize] = 10;
+        assert!(constraint_is_sat(&constraint, &z));
+        z[TestInputs::PcIn as usize] = 0;
+        assert!(!constraint_is_sat(&constraint, &z));
+        z[TestInputs::BytecodeA as usize] = 10;
+        assert!(constraint_is_sat(&constraint, &z));
     }
 }
 
