@@ -1,8 +1,9 @@
 use std::marker::PhantomData;
 use std::fmt::Debug;
-use ark_ff::PrimeField;
 use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount, EnumIter};
+use jolt_core::poly::field::JoltField;
+
 use crate::{impl_r1cs_input_lc_conversions, ops::{ConstraintInput, Term, Variable, LC}};
 
 
@@ -35,7 +36,6 @@ struct Constraint<I: ConstraintInput> {
     c: LC<I>,
 }
 
-// TODO(sragss): Current thinking is that this is overkill
 impl<I: ConstraintInput> Constraint<I> {
     // pub fn eq(left: Variable<I>, right: Variable<I>) -> Self {
     //     // (left - right) * right = 0
@@ -62,20 +62,20 @@ impl<I: ConstraintInput> Constraint<I> {
 
 
 
-struct R1CSInstance<F: PrimeField> {
+struct R1CSInstance<F: JoltField> {
     pub a: Vec<(usize, usize, F)>,
     pub b: Vec<(usize, usize, F)>,
     pub c: Vec<(usize, usize, F)>,
 }
 
-struct R1CSBuilder<F: PrimeField, I: ConstraintInput> {
+struct R1CSBuilder<F: JoltField, I: ConstraintInput> {
     constraints: Vec<Constraint<I>>,
     next_aux: usize,
     // compute_aux_funcs: Vec<Box<dyn Fn() -> Vec<F>>>,
     _marker: PhantomData<(F, I)>
 }
 
-impl<F: PrimeField, I: ConstraintInput> R1CSBuilder<F, I> {
+impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
     fn new() -> Self {
         Self {
             constraints: vec![],
@@ -229,7 +229,7 @@ impl<F: PrimeField, I: ConstraintInput> R1CSBuilder<F, I> {
 
 
 
-trait R1CSConstraintBuilder<F: PrimeField> {
+trait R1CSConstraintBuilder<F: JoltField> {
     type Inputs: ConstraintInput;
 
     fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>);
@@ -337,7 +337,7 @@ mod tests {
 
         // PcIn + PcOut == BytecodeA + 2 BytecodeVOpcode
         struct TestConstraints();
-        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+        impl<F: JoltField> R1CSConstraintBuilder<F> for TestConstraints {
             type Inputs = TestInputs;
             fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
                 let left = LC::sum2(Self::Inputs::PcIn, Self::Inputs::PcOut);
@@ -373,7 +373,7 @@ mod tests {
         // If PcIn == 1: BytecodeA = BytecodeVRS1
         // If PcIn == 0: BytecodeA = BytecodeVRS2
         struct TestConstraints();
-        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+        impl<F: JoltField> R1CSConstraintBuilder<F> for TestConstraints {
             type Inputs = TestInputs;
             fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
                 let condition = Self::Inputs::PcIn;
@@ -411,7 +411,7 @@ mod tests {
         // If PcIn == 0: AUX_RESULT = BytecodeVRS2
         // AUX_RESULT == BytecodeVImm
         struct TestConstraints();
-        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+        impl<F: JoltField> R1CSConstraintBuilder<F> for TestConstraints {
             type Inputs = TestInputs;
             fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
                 let condition = Self::Inputs::PcIn;
@@ -458,7 +458,7 @@ mod tests {
 
         // pack_le(OpFlags0, OpFlags1, OpFlags2, OpFlags3) == BytecodeA
         struct TestConstraints();
-        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+        impl<F: JoltField> R1CSConstraintBuilder<F> for TestConstraints {
             type Inputs = TestInputs;
             fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
                 let result = Variable::Input(TestInputs::BytecodeA);
@@ -490,7 +490,7 @@ mod tests {
 
         // pack_be(OpFlags0, OpFlags1, OpFlags2, OpFlags3) == BytecodeA
         struct TestConstraints();
-        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+        impl<F: JoltField> R1CSConstraintBuilder<F> for TestConstraints {
             type Inputs = TestInputs;
             fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
                 let result = Variable::Input(TestInputs::BytecodeA);
@@ -523,7 +523,7 @@ mod tests {
         // OpFlags0 * OpFlags1 == BytecodeA
         // OpFlags2 * OpFlags3 == Au
         struct TestConstraints();
-        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+        impl<F: JoltField> R1CSConstraintBuilder<F> for TestConstraints {
             type Inputs = TestInputs;
             fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
                 builder.constrain_prod(TestInputs::OpFlags0, TestInputs::OpFlags1, TestInputs::BytecodeA);
@@ -648,7 +648,7 @@ mod tests {
         let mut builder = R1CSBuilder::<Fr, JoltInputs>::new();
 
         struct JoltConstraints();
-        impl<F: PrimeField> R1CSConstraintBuilder<F> for JoltConstraints {
+        impl<F: JoltField> R1CSConstraintBuilder<F> for JoltConstraints {
             type Inputs = JoltInputs;
             fn build_constraints(&self, cs: &mut R1CSBuilder<F, Self::Inputs>) {
                 let op_flag_inputs = input_range!(JoltInputs::OpFlags0, JoltInputs::OpFlags_IsConcat);

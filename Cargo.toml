@@ -9,3 +9,9 @@ ark-ff = "0.4.2"
 enum_dispatch = "0.3.13"
 strum = "0.26.2"
 strum_macros = "0.26.2"
+jolt-core = { git = "https://github.com/a16z/jolt.git" }
+
+[patch.crates-io]
+ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "optimize/field-from-u64" }
+ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "optimize/field-from-u64" }
+ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "optimize/field-from-u64" }

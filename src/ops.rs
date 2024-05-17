@@ -191,8 +191,7 @@ impl<I: ConstraintInput> std::ops::Mul<Variable<I>> for i64 {
 }
 
 
-// Conversions and arithmetic for concrete ConstraintInput
-
+/// Conversions and arithmetic for concrete ConstraintInput
 #[macro_export]
 macro_rules! impl_r1cs_input_lc_conversions {
     ($ConcreteInput:ty) => {
