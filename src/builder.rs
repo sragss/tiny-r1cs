@@ -209,6 +209,25 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
         self.constrain_pack_be(unpacked, result, operand_bits);
         result
     }
+
+    /// Constrain x * y == z
+    fn constrain_prod(&mut self, x: impl Into<LC<I>>, y: impl Into<LC<I>>, z: impl Into<LC<I>>) {
+        let constraint = Constraint {
+            a: x.into(),
+            b: y.into(),
+            c: z.into()
+        };
+        self.constraints.push(constraint);
+    }
+
+    #[must_use]
+    fn allocate_prod(&mut self, x: impl Into<LC<I>>, y: impl Into<LC<I>>) -> Variable<I> {
+        let result = Variable::Auxiliary(self.next_aux);
+        self.next_aux += 1;
+
+        self.constrain_prod(x, y, result);
+        result
+    }
 }
 
 
@@ -250,7 +269,7 @@ mod tests {
         let aux_index = |aux_index: usize| num_input + aux_index;
 
         let num_vars = num_input + num_aux;
-        assert!(num_vars == inputs.len());
+        assert_eq!(num_vars, inputs.len());
 
         let mut a = 0;
         let mut b = 0;
@@ -503,6 +522,44 @@ mod tests {
         assert!(constraint_is_sat(&constraint, &z));
     }
 
+    #[test]
+    fn prod() {
+        let mut builder = R1CSBuilder::<Fr, TestInputs>::new();
+
+        // OpFlags0 * OpFlags1 == BytecodeA
+        // OpFlags2 * OpFlags3 == Au
+        struct TestConstraints();
+        impl<F: PrimeField> R1CSConstraintBuilder<F> for TestConstraints {
+            type Inputs = TestInputs;
+            fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>) {
+                builder.constrain_prod(TestInputs::OpFlags0, TestInputs::OpFlags1, TestInputs::BytecodeA);
+                let _aux = builder.allocate_prod(TestInputs::OpFlags2, TestInputs::OpFlags3);
+            }
+        }
+
+        let concrete_constraints = TestConstraints();
+        concrete_constraints.build_constraints(&mut builder);
+        assert_eq!(builder.constraints.len(), 2);
+        assert_eq!(builder.next_aux, 1);
+
+        let mut z = vec![0i64; TestInputs::COUNT];
+        // x * y == z
+        z[TestInputs::OpFlags0 as usize] = 7;
+        z[TestInputs::OpFlags1 as usize] = 10;
+        z[TestInputs::BytecodeA as usize] = 70;
+        assert!(constraint_is_sat(&builder.constraints[0], &z));
+        z[TestInputs::BytecodeA as usize] = 71;
+        assert!(!constraint_is_sat(&builder.constraints[0], &z));
+
+        // x * y == aux
+        z[TestInputs::OpFlags2 as usize] = 5;
+        z[TestInputs::OpFlags3 as usize] = 7;
+        z.push(35);
+        assert!(constraint_is_sat(&builder.constraints[1], &z));
+        z[TestInputs::COUNT] = 36;
+        assert!(!constraint_is_sat(&builder.constraints[1], &z));
+    }
+
     #[allow(non_camel_case_types)]
     #[derive(EnumIter, EnumCount, Clone, Copy, Debug)]
     #[repr(usize)]
@@ -548,6 +605,8 @@ mod tests {
         ChunksQ_2,
         ChunksQ_3,
 
+        LookupOutput,
+
         // TODO(sragss): Better names for first 2.
         OpFlags0,
         OpFlags1,
@@ -586,6 +645,8 @@ mod tests {
     const PC_START_ADDRESS: i64 = 0x80000000;
     const PC_NOOP_SHIFT: i64 = 4;
     const MEMORY_START: i64 = 128; // TODO(sragss): Non constant.
+    const LOG_M: usize = 16;
+    const OPERAND_SIZE: usize = LOG_M / 2;
 
 
     #[test]
@@ -609,17 +670,52 @@ mod tests {
                 cs.constrain_pack_be(op_flag_inputs.to_vec(), JoltInputs::Bytecode_Opcode, 1);
 
                 let ram_writes = input_enum_range!(JoltInputs::RAM_Read_Byte0, JoltInputs::RAM_Read_Byte3);
-                let packed_load_store = cs.allocate_pack_be(ram_writes.to_vec(), 8);
+                let packed_load_store = cs.allocate_pack_le(ram_writes.to_vec(), 8);
 
                 let real_pc = LC::sum2(4i64 * JoltInputs::PcIn, PC_START_ADDRESS + PC_NOOP_SHIFT);
                 let x = cs.allocate_if_else(JoltInputs::OpFlags0, JoltInputs::RAM_Read_RS1, real_pc);
                 let y = cs.allocate_if_else(JoltInputs::OpFlags1, JoltInputs::RAM_Read_RS2, JoltInputs::Bytecode_Imm);
 
-                let signed_output = LC::sub2(JoltInputs::Bytecode_Imm, 0xffffffffi64 - 1i64);
+                let signed_output = LC::sub2(JoltInputs::Bytecode_Imm, 0xffffffffi64 - 1i64); // TODO(sragss): Comment about twos-complement.
                 let imm_signed = cs.allocate_if_else(JoltInputs::OpFlags_SignImm, JoltInputs::Bytecode_Imm, signed_output);
 
-                let or_condition = LC::sum2(JoltInputs::OpFlags0, JoltInputs::OpFlags1);
-                cs.constrain_eq_conditional(or_condition, LC::sum2(JoltInputs::RAM_Read_RS1, imm_signed), LC::sum2(JoltInputs::RAM_A, MEMORY_START));
+                let flag_0_or_1_condition = LC::sum2(JoltInputs::OpFlags0, JoltInputs::OpFlags1);
+                cs.constrain_eq_conditional(flag_0_or_1_condition, LC::sum2(JoltInputs::RAM_Read_RS1, imm_signed), LC::sum2(JoltInputs::RAM_A, MEMORY_START));
+
+                cs.constrain_eq_conditional(JoltInputs::OpFlags_IsLoad, JoltInputs::RAM_Read_Byte0, JoltInputs::RAM_Write_Byte0);
+                cs.constrain_eq_conditional(JoltInputs::OpFlags_IsLoad, JoltInputs::RAM_Read_Byte1, JoltInputs::RAM_Write_Byte1);
+                cs.constrain_eq_conditional(JoltInputs::OpFlags_IsLoad, JoltInputs::RAM_Read_Byte2, JoltInputs::RAM_Write_Byte2);
+                cs.constrain_eq_conditional(JoltInputs::OpFlags_IsLoad, JoltInputs::RAM_Read_Byte3, JoltInputs::RAM_Write_Byte3);
+
+                cs.constrain_eq_conditional(JoltInputs::OpFlags_IsStore, packed_load_store, JoltInputs::LookupOutput);
+
+                let packed_query = cs.allocate_pack_be(input_enum_range!(JoltInputs::ChunksQ_0, JoltInputs::ChunksQ_3).to_vec(), LOG_M);
+                cs.constrain_eq_conditional(JoltInputs::IF_Add, packed_query, x + y);
+                cs.constrain_eq_conditional(JoltInputs::IF_Sub, packed_query, x - y); // TODO(sragss): Twos complement.
+                cs.constrain_eq_conditional(JoltInputs::OpFlags_IsLoad, packed_query, packed_load_store);
+                cs.constrain_eq_conditional(JoltInputs::OpFlags_IsStore, packed_query, JoltInputs::RAM_Read_RS2);
+
+                // TODO(sragss): BE or LE
+                // TODO(sragss): Uses 2 excess constraints for condition gating. Could make constrain_pack_be_conditional... Or make everything conditional...
+                let chunked_x = cs.allocate_pack_be(input_enum_range!(JoltInputs::ChunksX_0, JoltInputs::ChunksX_3).to_vec(), OPERAND_SIZE);
+                let chunked_y= cs.allocate_pack_be(input_enum_range!(JoltInputs::ChunksY_0, JoltInputs::ChunksY_3).to_vec(), OPERAND_SIZE);
+                cs.constrain_eq_conditional(JoltInputs::OpFlags_IsConcat, chunked_x, x);
+                cs.constrain_eq_conditional(JoltInputs::OpFlags_IsConcat, chunked_y, y);
+
+                // TODO(sragss): Some concat bullshit here.
+
+                // if (rd != 0 && if_update_rd_with_lookup_output == 1) constrain(rd_val == LookupOutput)
+                // if (rd != 0 && is_jump_instr == 1) constrain(rd_val == 4 * PC)
+                let rd_nonzero_and_lookup_to_rd = cs.allocate_prod(JoltInputs::Bytecode_RD, JoltInputs::OpFlags_LookupOutToRd);
+                cs.constrain_eq_conditional(rd_nonzero_and_lookup_to_rd, JoltInputs::RAM_Write_RD, JoltInputs::LookupOutput);
+                let rd_nonzero_and_jmp = cs.allocate_prod(JoltInputs::Bytecode_RD, JoltInputs::OpFlags_IsJmp);
+                let lhs = LC::sum2(JoltInputs::PcIn, PC_START_ADDRESS - PC_NOOP_SHIFT);
+                let rhs = JoltInputs::RAM_Write_RD;
+                cs.constrain_eq_conditional(rd_nonzero_and_jmp, lhs, rhs);
+
+
+
+                // TODO(sragss): PC incrementing constraints. Next PC: Check if it's a branch and the lookup output is 1. Check if it's a jump.
 
             }
         }
@@ -681,6 +777,7 @@ impl<I: R1CSInputType> std::ops::Add for LC<I> {
         LC(combined_terms)
     }
 }
+
 impl<I: R1CSInputType> std::ops::Sub for LC<I> {
     type Output = Self;
 
@@ -717,6 +814,8 @@ impl<I: R1CSInputType> std::ops::Sub for Term<I> {
 
 
 
+
+// Implementations for Term<I>
 impl<I: R1CSInputType> std::ops::Neg for Term<I> {
     type Output = Self;
 
@@ -731,36 +830,37 @@ impl<I: R1CSInputType> Into<Term<I>> for i64 {
     }
 }
 
-impl<I: R1CSInputType> Into<LC<I>> for i64 {
-    fn into(self) -> LC<I> {
-        LC(vec![Term(Variable::Constant, self)])
-    }
-}
-
 impl<I: R1CSInputType> Into<Term<I>> for Variable<I> {
     fn into(self) -> Term<I> {
         Term(self, 1)
     }
 }
 
-impl<I: R1CSInputType> std::ops::Mul<i64> for Variable<I> {
-    type Output = Term<I>;
-
-    fn mul(self, other: i64) -> Self::Output {
-        Term(self, other)
-    }
-}
-impl<I: R1CSInputType> std::ops::Mul<Variable<I>> for i64 {
-    type Output = Term<I>;
-
-    fn mul(self, other: Variable<I>) -> Self::Output {
-        Term(other, self)
-    }
-}
-
 impl<I: R1CSInputType> Into<Term<I>> for (Variable<I>, i64) {
     fn into(self) -> Term<I> {
         Term(self.0, self.1)
+    }
+}
+
+impl<I: R1CSInputType> std::ops::Add for Variable<I> {
+    type Output = LC<I>;
+
+    fn add(self, other: Self) -> Self::Output {
+        LC(vec![Term(self, 1), Term(other, 1)])
+    }
+}
+impl<I: R1CSInputType> std::ops::Sub for Variable<I> {
+    type Output = LC<I>;
+
+    fn sub(self, other: Self) -> Self::Output {
+        LC(vec![Term(self, 1), Term(other, -1)])
+    }
+}
+
+// Implementations for LC<I>
+impl<I: R1CSInputType> Into<LC<I>> for i64 {
+    fn into(self) -> LC<I> {
+        LC(vec![Term(Variable::Constant, self)])
     }
 }
 
@@ -782,13 +882,29 @@ impl<I: R1CSInputType> Into<LC<I>> for Vec<Term<I>> {
     }
 }
 
-
 impl<I: R1CSInputType> std::ops::Neg for LC<I> {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
         let neg_terms = self.0.into_iter().map(|term| -term).collect();
         LC(neg_terms)
+    }
+}
+
+// Implementations for Variable<I>
+impl<I: R1CSInputType> std::ops::Mul<i64> for Variable<I> {
+    type Output = Term<I>;
+
+    fn mul(self, other: i64) -> Self::Output {
+        Term(self, other)
+    }
+}
+
+impl<I: R1CSInputType> std::ops::Mul<Variable<I>> for i64 {
+    type Output = Term<I>;
+
+    fn mul(self, other: Variable<I>) -> Self::Output {
+        Term(other, self)
     }
 }
 
