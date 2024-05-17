@@ -3,10 +3,10 @@ use std::fmt::Debug;
 use ark_ff::PrimeField;
 use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount, EnumIter};
+use crate::{impl_r1cs_input_lc_conversions, ops::{ConstraintInput, Term, Variable, LC}};
 
-pub trait R1CSInputType: Clone + Copy + Debug + IntoEnumIterator + EnumCount + Into<usize> {}
 
-#[derive(EnumIter, EnumCount, Clone, Copy, Debug)]
+#[derive(EnumIter, EnumCount, Clone, Copy, Debug, PartialEq)]
 #[repr(usize)]
 enum InputConfigPrimeField {
     PcIn,
@@ -18,48 +18,42 @@ enum InputConfigPrimeField {
     BytecodeVRd,
     BytecodeVImm
 }
-impl R1CSInputType for InputConfigPrimeField {}
+impl ConstraintInput for InputConfigPrimeField {}
+impl_r1cs_input_lc_conversions!(InputConfigPrimeField);
 
 
 
 
 
-#[derive(Clone, Copy, Debug)]
-enum Variable<I: R1CSInputType> {
-    Input(I),
-    Auxiliary(usize),
-    Constant,
-}
 
 
 /// Constraints over a single row. Each variable points to a single item in Z and the corresponding coefficient.
 #[derive(Clone, Debug)]
-struct Constraint<I: R1CSInputType> {
+struct Constraint<I: ConstraintInput> {
     a: LC<I>,
     b: LC<I>,
     c: LC<I>,
 }
 
-
 // TODO(sragss): Current thinking is that this is overkill
-impl<I: R1CSInputType> Constraint<I> {
-    pub fn eq(left: Variable<I>, right: Variable<I>) -> Self {
-        // (left - right) * right = 0
-        Self {
-            a: Term(left, 1) - Term(right, 1),
-            b: LC(vec![Term(Variable::Constant, 1)]),
-            c: LC(vec![])
-        }
-    }
+impl<I: ConstraintInput> Constraint<I> {
+    // pub fn eq(left: Variable<I>, right: Variable<I>) -> Self {
+    //     // (left - right) * right = 0
+    //     Self {
+    //         a: Term(left, 1) - Term(right, 1),
+    //         b: LC(vec![Term(Variable::Constant, 1)]),
+    //         c: LC(vec![])
+    //     }
+    // }
 
-    pub fn binary(var: Variable<I>) -> Self {
-        // var * (1 - var)
-        Self {
-            a: LC(vec![Term(var, 1)]),
-            b: LC(vec![Term(var, -1), Term(Variable::Constant, 1)]),
-            c: LC(vec![])
-        }
-    }
+    // pub fn binary(var: Variable<I>) -> Self {
+    //     // var * (1 - var)
+    //     Self {
+    //         a: LC(vec![Term(var, 1)]),
+    //         b: LC(vec![Term(var, -1), Term(Variable::Constant, 1)]),
+    //         c: LC(vec![])
+    //     }
+    // }
 }
 
 
@@ -74,14 +68,14 @@ struct R1CSInstance<F: PrimeField> {
     pub c: Vec<(usize, usize, F)>,
 }
 
-struct R1CSBuilder<F: PrimeField, I: R1CSInputType> {
+struct R1CSBuilder<F: PrimeField, I: ConstraintInput> {
     constraints: Vec<Constraint<I>>,
     next_aux: usize,
     // compute_aux_funcs: Vec<Box<dyn Fn() -> Vec<F>>>,
     _marker: PhantomData<(F, I)>
 }
 
-impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
+impl<F: PrimeField, I: ConstraintInput> R1CSBuilder<F, I> {
     fn new() -> Self {
         Self {
             constraints: vec![],
@@ -104,7 +98,7 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
         let constraint = Constraint {
             a,
             b,
-            c: LC(vec![])
+            c: LC::zero()
         };
         println!("constraint {:?}", constraint);
         self.constraints.push(constraint);
@@ -118,7 +112,7 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
 
         let a = condition;
         let b = left - right;
-        let c = LC(vec![]);;
+        let c = LC::zero();
         let constraint = Constraint { a, b, c };
         self.constraints.push(constraint);
     }
@@ -130,7 +124,7 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
         let constraint = Constraint {
             a: value.clone(),
             b: one - value,
-            c: LC(vec![])
+            c: LC::zero()
         };
         self.constraints.push(constraint);
     }
@@ -236,7 +230,7 @@ impl<F: PrimeField, I: R1CSInputType> R1CSBuilder<F, I> {
 
 
 trait R1CSConstraintBuilder<F: PrimeField> {
-    type Inputs: R1CSInputType;
+    type Inputs: ConstraintInput;
 
     fn build_constraints(&self, builder: &mut R1CSBuilder<F, Self::Inputs>);
 }
@@ -244,19 +238,19 @@ trait R1CSConstraintBuilder<F: PrimeField> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{impl_auto_conversions, enum_range, input_enum_range};
+    use crate::{impl_r1cs_input_lc_conversions, input_range};
 
     use super::*;
     use ark_bn254::Fr;
 
-    fn constraint_is_sat<I: R1CSInputType>(constraint: &Constraint<I>, inputs: &Vec<i64>) -> bool {
+    fn constraint_is_sat<I: ConstraintInput>(constraint: &Constraint<I>, inputs: &Vec<i64>) -> bool {
         // Find the number of variables and the number of aux. Inputs should be equal to this combined length
         let num_input=  I::COUNT;
         let mut num_aux = 0;
 
         let mut aux_set = std::collections::HashSet::new();
         for constraint in [&constraint.a, &constraint.b, &constraint.c] {
-            for Term(var, _value) in &constraint.0 {
+            for Term(var, _value) in constraint.terms() {
                 if let Variable::Auxiliary(aux) = var {
                     aux_set.insert(aux);
                 }
@@ -277,7 +271,7 @@ mod tests {
         let mut buckets = [&mut a, &mut b, &mut c];
         let constraints = [&constraint.a, &constraint.b, &constraint.c];
         for (bucket, constraint) in buckets.iter_mut().zip(constraints.iter()) {
-            for Term(var, coefficient) in constraint.0.iter() {
+            for Term(var, coefficient) in constraint.terms() {
                 match var {
                     Variable::Input(input) => {
                         let in_u: usize = (*input).into();
@@ -298,19 +292,19 @@ mod tests {
         a * b == c
     }
 
-    #[test]
-    fn constraints() {
-        let eq_constraint = Constraint::eq(Variable::Input(TestInputs::PcIn), Variable::Input(TestInputs::PcOut));
-        let mut z = vec![0i64; TestInputs::COUNT];
-        z[TestInputs::PcIn as usize] = 1;
-        z[TestInputs::PcOut as usize] = 1;
-        assert!(constraint_is_sat(&eq_constraint, &z));
-        z[TestInputs::PcOut as usize] = 2;
-        assert!(!constraint_is_sat(&eq_constraint, &z));
-    }
+    // #[test]
+    // fn constraints() {
+    //     let eq_constraint = Constraint::eq(Variable::Input(TestInputs::PcIn), Variable::Input(TestInputs::PcOut));
+    //     let mut z = vec![0i64; TestInputs::COUNT];
+    //     z[TestInputs::PcIn as usize] = 1;
+    //     z[TestInputs::PcOut as usize] = 1;
+    //     assert!(constraint_is_sat(&eq_constraint, &z));
+    //     z[TestInputs::PcOut as usize] = 2;
+    //     assert!(!constraint_is_sat(&eq_constraint, &z));
+    // }
 
     #[allow(non_camel_case_types)]
-    #[derive(EnumIter, EnumCount, Clone, Copy, Debug)]
+    #[derive(EnumIter, EnumCount, Clone, Copy, Debug, PartialEq)]
     #[repr(usize)]
     enum TestInputs {
         PcIn,
@@ -334,8 +328,8 @@ mod tests {
         OpFlags3,
         OpFlags_SignImm
     }
-    impl R1CSInputType for TestInputs {}
-    impl_auto_conversions!(TestInputs);
+    impl ConstraintInput for TestInputs {}
+    impl_r1cs_input_lc_conversions!(TestInputs);
 
     #[test]
     fn eq_builder() {
@@ -561,7 +555,7 @@ mod tests {
     }
 
     #[allow(non_camel_case_types)]
-    #[derive(EnumIter, EnumCount, Clone, Copy, Debug)]
+    #[derive(EnumIter, EnumCount, Clone, Copy, Debug, PartialEq)]
     #[repr(usize)]
     enum JoltInputs {
         PcIn,
@@ -639,8 +633,8 @@ mod tests {
         IF_Sra,
         IF_Srl,
     }
-    impl R1CSInputType for JoltInputs {}
-    impl_auto_conversions!(JoltInputs);
+    impl_r1cs_input_lc_conversions!(JoltInputs);
+    impl ConstraintInput for JoltInputs {}
 
     const PC_START_ADDRESS: i64 = 0x80000000;
     const PC_NOOP_SHIFT: i64 = 4;
@@ -657,11 +651,11 @@ mod tests {
         impl<F: PrimeField> R1CSConstraintBuilder<F> for JoltConstraints {
             type Inputs = JoltInputs;
             fn build_constraints(&self, cs: &mut R1CSBuilder<F, Self::Inputs>) {
-                let op_flag_inputs = input_enum_range!(JoltInputs::OpFlags0, JoltInputs::OpFlags_IsConcat);
+                let op_flag_inputs = input_range!(JoltInputs::OpFlags0, JoltInputs::OpFlags_IsConcat);
                 for op_flag_input in op_flag_inputs {
                     cs.constrain_binary(op_flag_input);
                 }
-                for instruction_flag_input in input_enum_range!(JoltInputs::IF_Add, JoltInputs::IF_Srl) {
+                for instruction_flag_input in input_range!(JoltInputs::IF_Add, JoltInputs::IF_Srl) {
                     cs.constrain_binary(instruction_flag_input);
                 }
 
@@ -669,7 +663,7 @@ mod tests {
 
                 cs.constrain_pack_be(op_flag_inputs.to_vec(), JoltInputs::Bytecode_Opcode, 1);
 
-                let ram_writes = input_enum_range!(JoltInputs::RAM_Read_Byte0, JoltInputs::RAM_Read_Byte3);
+                let ram_writes = input_range!(JoltInputs::RAM_Read_Byte0, JoltInputs::RAM_Read_Byte3);
                 let packed_load_store = cs.allocate_pack_le(ram_writes.to_vec(), 8);
 
                 let real_pc = LC::sum2(4i64 * JoltInputs::PcIn, PC_START_ADDRESS + PC_NOOP_SHIFT);
@@ -689,7 +683,7 @@ mod tests {
 
                 cs.constrain_eq_conditional(JoltInputs::OpFlags_IsStore, packed_load_store, JoltInputs::LookupOutput);
 
-                let packed_query = cs.allocate_pack_be(input_enum_range!(JoltInputs::ChunksQ_0, JoltInputs::ChunksQ_3).to_vec(), LOG_M);
+                let packed_query = cs.allocate_pack_be(input_range!(JoltInputs::ChunksQ_0, JoltInputs::ChunksQ_3).to_vec(), LOG_M);
                 cs.constrain_eq_conditional(JoltInputs::IF_Add, packed_query, x + y);
                 cs.constrain_eq_conditional(JoltInputs::IF_Sub, packed_query, x - y); // TODO(sragss): Twos complement.
                 cs.constrain_eq_conditional(JoltInputs::OpFlags_IsLoad, packed_query, packed_load_store);
@@ -697,8 +691,8 @@ mod tests {
 
                 // TODO(sragss): BE or LE
                 // TODO(sragss): Uses 2 excess constraints for condition gating. Could make constrain_pack_be_conditional... Or make everything conditional...
-                let chunked_x = cs.allocate_pack_be(input_enum_range!(JoltInputs::ChunksX_0, JoltInputs::ChunksX_3).to_vec(), OPERAND_SIZE);
-                let chunked_y= cs.allocate_pack_be(input_enum_range!(JoltInputs::ChunksY_0, JoltInputs::ChunksY_3).to_vec(), OPERAND_SIZE);
+                let chunked_x = cs.allocate_pack_be(input_range!(JoltInputs::ChunksX_0, JoltInputs::ChunksX_3).to_vec(), OPERAND_SIZE);
+                let chunked_y= cs.allocate_pack_be(input_range!(JoltInputs::ChunksY_0, JoltInputs::ChunksY_3).to_vec(), OPERAND_SIZE);
                 cs.constrain_eq_conditional(JoltInputs::OpFlags_IsConcat, chunked_x, x);
                 cs.constrain_eq_conditional(JoltInputs::OpFlags_IsConcat, chunked_y, y);
 
@@ -712,7 +706,6 @@ mod tests {
                 let lhs = LC::sum2(JoltInputs::PcIn, PC_START_ADDRESS - PC_NOOP_SHIFT);
                 let rhs = JoltInputs::RAM_Write_RD;
                 cs.constrain_eq_conditional(rd_nonzero_and_jmp, lhs, rhs);
-
 
 
                 // TODO(sragss): PC incrementing constraints. Next PC: Check if it's a branch and the lookup output is 1. Check if it's a jump.
@@ -742,261 +735,3 @@ mod tests {
 
 
 
-
-
-#[derive(Clone, Copy, Debug)]
-struct Term<I: R1CSInputType>(Variable<I>, i64);
-
-/// Linear combination.
-#[derive(Clone, Debug)]
-struct LC<I: R1CSInputType>(Vec<Term<I>>);
-
-impl<I: R1CSInputType> LC<I> {
-    fn terms(&self) -> usize {
-        self.0.len()
-    }
-
-    fn sum2(one: impl Into<Term<I>>, two: impl Into<Term<I>>) -> Self {
-        LC(vec![one.into(), two.into()])
-    }
-
-    /// a - b -> LC
-    fn sub2(a: impl Into<LC<I>>, b: impl Into<LC<I>>) -> Self {
-        let a: LC<I> = a.into();
-        let b: LC<I> = b.into();
-
-        a - b
-    }
-}
-impl<I: R1CSInputType> std::ops::Add for LC<I> {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self::Output {
-        let mut combined_terms = self.0;
-        combined_terms.extend(other.0);
-        LC(combined_terms)
-    }
-}
-
-impl<I: R1CSInputType> std::ops::Sub for LC<I> {
-    type Output = Self;
-
-    fn sub(self, other: Self) -> Self::Output {
-        let mut combined_terms = self.0;
-        combined_terms.extend((-other).0);
-        LC(combined_terms)
-    }
-}
-
-impl<I: R1CSInputType> std::ops::Add for Term<I> {
-    type Output = LC<I>;
-
-    fn add(self, other: Self) -> Self::Output {
-        LC(vec![self, other])
-    }
-}
-
-impl<I: R1CSInputType> std::ops::Sub for Term<I> {
-    type Output = LC<I>;
-
-    fn sub(self, other: Self) -> Self::Output {
-        LC(vec![self, -other])
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-// Implementations for Term<I>
-impl<I: R1CSInputType> std::ops::Neg for Term<I> {
-    type Output = Self;
-
-    fn neg(self) -> Self::Output {
-        Term(self.0, self.1 * -1)
-    }
-}
-
-impl<I: R1CSInputType> Into<Term<I>> for i64 {
-    fn into(self) -> Term<I> {
-        Term(Variable::Constant, self)
-    }
-}
-
-impl<I: R1CSInputType> Into<Term<I>> for Variable<I> {
-    fn into(self) -> Term<I> {
-        Term(self, 1)
-    }
-}
-
-impl<I: R1CSInputType> Into<Term<I>> for (Variable<I>, i64) {
-    fn into(self) -> Term<I> {
-        Term(self.0, self.1)
-    }
-}
-
-impl<I: R1CSInputType> std::ops::Add for Variable<I> {
-    type Output = LC<I>;
-
-    fn add(self, other: Self) -> Self::Output {
-        LC(vec![Term(self, 1), Term(other, 1)])
-    }
-}
-impl<I: R1CSInputType> std::ops::Sub for Variable<I> {
-    type Output = LC<I>;
-
-    fn sub(self, other: Self) -> Self::Output {
-        LC(vec![Term(self, 1), Term(other, -1)])
-    }
-}
-
-// Implementations for LC<I>
-impl<I: R1CSInputType> Into<LC<I>> for i64 {
-    fn into(self) -> LC<I> {
-        LC(vec![Term(Variable::Constant, self)])
-    }
-}
-
-impl<I: R1CSInputType> Into<LC<I>> for Variable<I> {
-    fn into(self) -> LC<I> {
-        LC(vec![Term(self, 1)])
-    }
-}
-
-impl<I: R1CSInputType> Into<LC<I>> for Term<I> {
-    fn into(self) -> LC<I> {
-        LC(vec![self])
-    }
-}
-
-impl<I: R1CSInputType> Into<LC<I>> for Vec<Term<I>> {
-    fn into(self) -> LC<I> {
-        LC(self)
-    }
-}
-
-impl<I: R1CSInputType> std::ops::Neg for LC<I> {
-    type Output = Self;
-
-    fn neg(self) -> Self::Output {
-        let neg_terms = self.0.into_iter().map(|term| -term).collect();
-        LC(neg_terms)
-    }
-}
-
-// Implementations for Variable<I>
-impl<I: R1CSInputType> std::ops::Mul<i64> for Variable<I> {
-    type Output = Term<I>;
-
-    fn mul(self, other: i64) -> Self::Output {
-        Term(self, other)
-    }
-}
-
-impl<I: R1CSInputType> std::ops::Mul<Variable<I>> for i64 {
-    type Output = Term<I>;
-
-    fn mul(self, other: Variable<I>) -> Self::Output {
-        Term(other, self)
-    }
-}
-
-
-// For each R1CS config, these need to be written concretely for the R1CSInputType
-#[macro_export]
-macro_rules! impl_auto_conversions {
-    ($ConcreteInput:ty) => {
-        impl Into<usize> for $ConcreteInput {
-            fn into(self) -> usize {
-                self as usize
-            }
-        }
-        impl Into<Variable<$ConcreteInput>> for $ConcreteInput {
-            fn into(self) -> Variable<$ConcreteInput> {
-                Variable::Input(self)
-            }
-        }
-
-        impl Into<(Variable<$ConcreteInput>, i64)> for $ConcreteInput {
-            fn into(self) -> (Variable<$ConcreteInput>, i64) {
-                (Variable::Input(self), 1)
-            }
-        }
-        impl Into<Term<$ConcreteInput>> for $ConcreteInput {
-            fn into(self) -> Term<$ConcreteInput> {
-                Term(Variable::Input(self), 1)
-            }
-        }
-
-        impl Into<Term<$ConcreteInput>> for ($ConcreteInput, i64) {
-            fn into(self) -> Term<$ConcreteInput> {
-                Term(Variable::Input(self.0), self.1)
-            }
-        }
-
-        impl Into<LC<$ConcreteInput>> for $ConcreteInput {
-            fn into(self) -> LC<$ConcreteInput> {
-                LC(vec![Term(Variable::Input(self), 1)])
-            }
-        }
-
-        impl Into<LC<$ConcreteInput>> for Vec<$ConcreteInput> {
-            fn into(self) -> LC<$ConcreteInput> {
-                let terms: Vec<Term<$ConcreteInput>> = self.into_iter().map(Into::into).collect();
-                LC(terms)
-            }
-        }
-
-        impl std::ops::Mul<i64> for $ConcreteInput {
-            type Output = Term<$ConcreteInput>;
-
-            fn mul(self, rhs: i64) -> Self::Output {
-                Term(Variable::Input(self), rhs)
-            }
-        }
-
-        impl std::ops::Mul<$ConcreteInput> for i64 {
-            type Output = Term<$ConcreteInput>;
-
-            fn mul(self, rhs: $ConcreteInput) -> Self::Output {
-                Term(Variable::Input(rhs), self)
-            }
-        }
-        
-    };
-}
-
-#[macro_export]
-macro_rules! enum_range {
-    ($start:path, $end:path) => {
-        {
-            let mut arr = [$start; ($end as usize) - ($start as usize) + 1];
-            for i in ($start as usize)..=($end as usize) {
-                arr[i - ($start as usize)] = unsafe { std::mem::transmute::<usize, _>(i) };
-            }
-            arr
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! input_enum_range {
-    ($start:path, $end:path) => {
-        {
-            let mut arr = [Variable::Input($start); ($end as usize) - ($start as usize) + 1];
-            for i in ($start as usize)..=($end as usize) {
-                arr[i - ($start as usize)] = Variable::Input(unsafe { std::mem::transmute::<usize, _>(i) });
-            }
-            arr
-        }
-    };
-}
-
-impl_auto_conversions!(InputConfigPrimeField);
