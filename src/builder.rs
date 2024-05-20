@@ -14,6 +14,7 @@ struct Constraint<I: ConstraintInput> {
 }
 
 struct AuxComputation<F: JoltField, I: ConstraintInput> {
+    output: Variable<I>,
     symbolic_inputs: Vec<LC<I>>,
     flat_vars: Vec<Variable<I>>,
     input_to_flat: Vec<Option<Range<usize>>>,
@@ -21,7 +22,7 @@ struct AuxComputation<F: JoltField, I: ConstraintInput> {
 }
 
 impl<F: JoltField, I: ConstraintInput> AuxComputation<F, I> {
-    fn new(symbolic_inputs: Vec<LC<I>>, compute: Box<dyn Fn(&[F]) -> F>) -> Self {
+    fn new(output: Variable<I>, symbolic_inputs: Vec<LC<I>>, compute: Box<dyn Fn(&[F]) -> F>) -> Self {
         let flat_var_count: usize = symbolic_inputs.iter().map(|input| input.num_vars()).sum();
         let mut flat_vars = Vec::with_capacity(flat_var_count);
         let mut input_to_flat = Vec::with_capacity(symbolic_inputs.len());
@@ -44,8 +45,18 @@ impl<F: JoltField, I: ConstraintInput> AuxComputation<F, I> {
             }
         }
         assert_eq!(flat_vars.len(), flat_var_count);
+
+        #[cfg(test)]
+        for aux_var in &flat_vars {
+            if let Variable::Auxiliary(aux) = aux_var {
+                // Currently do not support aux computations dependent on another. Should work if executed sequentially, but prevents 
+                // parallel aux computation. If needed, add via aux dependency graph.
+                panic!("Aux computation depends on another aux computation: {output:?} = f({aux_var:?})");
+            }
+        }
         
         Self {
+            output,
             symbolic_inputs,
             flat_vars,
             input_to_flat,
@@ -56,6 +67,7 @@ impl<F: JoltField, I: ConstraintInput> AuxComputation<F, I> {
 
     /// Takes one value per value in flat_vars.
     fn compute(&self, values: &[F]) -> F {
+        println!("Computing aux: {:?}", self.output);
         assert_eq!(values.len(), self.flat_vars.len());
         assert_eq!(self.input_to_flat.len(), self.symbolic_inputs.len());
         let computed_inputs: Vec<_> = self.symbolic_inputs.iter().enumerate()
@@ -97,12 +109,20 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
         }
     }
 
-    fn allocate_aux(&mut self, aux_computation: AuxComputation<F, I>) -> Variable<I> {
+    fn allocate_aux(&mut self, symbolic_inputs: Vec<LC<I>>, compute: Box<dyn Fn(&[F]) -> F>) -> Variable<I> {
         let new_aux = Variable::Auxiliary(self.next_aux);
         self.next_aux += 1;
-        self.aux_computations.push(aux_computation);
+
+        let computation = AuxComputation::new(new_aux.clone(), symbolic_inputs, compute);
+        self.aux_computations.push(computation);
+
 
         new_aux
+    }
+
+    // TODO(sragss): Likely have to remove this concept for non-uniform.
+    pub fn witness_size(&self) -> usize {
+        I::COUNT + self.next_aux + 1 // num vars + num_aux + 1 const
     }
 
     /// Index of variable within z.
@@ -192,14 +212,13 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
     pub fn allocate_if_else(&mut self, condition: impl Into<LC<I>>, result_true: impl Into<LC<I>>, result_false: impl Into<LC<I>>) -> Variable<I> {
         let (condition, result_true, result_false) = (condition.into(), result_true.into(), result_false.into());
 
-        let compute_aux= Self::compute_if_else(&condition, &result_true, &result_false);
-        let aux_var = self.allocate_aux(compute_aux);
+        let aux_var = self.aux_if_else(&condition, &result_true, &result_false);
 
         self.constrain_if_else(condition, result_true, result_false, aux_var);
         aux_var
     }
 
-    fn compute_if_else(condition: &LC<I>, result_true: &LC<I>, result_false: &LC<I>) -> AuxComputation<F, I> {
+    fn aux_if_else(&mut self, condition: &LC<I>, result_true: &LC<I>, result_false: &LC<I>) -> Variable<I> {
         // aux = (condition == 1) ? result_true : result_false;
         let if_else = |values: &[F]| -> F {
             assert_eq!(values.len(), 3);
@@ -214,10 +233,9 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
             }
         };
 
-        AuxComputation::new(
-            vec![condition.clone(), result_true.clone(), result_false.clone()], 
-            Box::new(if_else)
-        )
+        let symbolic_inputs= vec![condition.clone(), result_true.clone(), result_false.clone()];
+        let compute = Box::new(if_else);
+        self.allocate_aux(symbolic_inputs, compute)
     }
 
     // TODO(sragss): Technically we could use unpacked: Vec<LC<I>> here easily, but it feels like it would confuse the API.
@@ -235,23 +253,22 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
 
     #[must_use]
     pub fn allocate_pack_le(&mut self, unpacked: Vec<Variable<I>>, operand_bits: usize) -> Variable<I> {
-        let packed = self.allocate_aux(Self::compute_pack_le(&unpacked, operand_bits));
+        let packed = self.aux_pack_le(&unpacked, operand_bits);
 
         self.constrain_pack_le(unpacked, packed, operand_bits);
         packed
     }
 
-    fn compute_pack_le(to_pack: &[Variable<I>], operand_bits: usize) -> AuxComputation<F, I> {
+    fn aux_pack_le(&mut self, to_pack: &[Variable<I>], operand_bits: usize) -> Variable<I> {
         let pack = move |values: &[F]| -> F {
             values.into_iter().enumerate().fold(F::zero(), |acc, (idx, &value)| {
                 acc + value * F::from_u64(1 << (idx * operand_bits)).unwrap()
             })
         };
 
-        AuxComputation::new(
-            to_pack.iter().cloned().map(|sym| sym.into()).collect(),
-            Box::new(pack)
-        )
+        let symbolic_inputs = to_pack.iter().cloned().map(|sym| sym.into()).collect();
+        let compute = Box::new(pack);
+        self.allocate_aux(symbolic_inputs, compute)
     }
 
     pub fn constrain_pack_be(
@@ -269,23 +286,22 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
 
     #[must_use]
     pub fn allocate_pack_be(&mut self, unpacked: Vec<Variable<I>>, operand_bits: usize) -> Variable<I> {
-        let packed = self.allocate_aux(Self::compute_pack_be(&unpacked, operand_bits));
+        let packed = self.aux_pack_be(&unpacked, operand_bits);
 
         self.constrain_pack_be(unpacked, packed, operand_bits);
         packed
     }
 
-    fn compute_pack_be(to_pack: &[Variable<I>], operand_bits: usize) -> AuxComputation<F, I> {
+    fn aux_pack_be(&mut self, to_pack: &[Variable<I>], operand_bits: usize) -> Variable<I> {
         let pack = move |values: &[F]| -> F {
             values.into_iter().rev().enumerate().fold(F::zero(), |acc, (idx, &value)| {
                 acc + value * F::from_u64(1 << (idx * operand_bits)).unwrap()
             })
         };
 
-        AuxComputation::new(
-            to_pack.iter().cloned().map(|sym| sym.into()).collect(),
-            Box::new(pack)
-        )
+        let symbolic_inputs = to_pack.iter().cloned().map(|sym| sym.into()).collect();
+        let compute = Box::new(pack);
+        self.allocate_aux(symbolic_inputs, compute)
     }
 
     /// Constrain x * y == z
@@ -301,23 +317,22 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
     #[must_use]
     pub fn allocate_prod(&mut self, x: impl Into<LC<I>>, y: impl Into<LC<I>>) -> Variable<I> {
         let (x, y) = (x.into(), y.into());
-        let z = self.allocate_aux(Self::compute_prod(&x, &y));
+        let z = self.aux_prod(&x, &y);
 
         self.constrain_prod(x, y, z);
         z
     }
 
-    fn compute_prod(x: &LC<I>, y: &LC<I>) -> AuxComputation<F, I> {
+    fn aux_prod(&mut self, x: &LC<I>, y: &LC<I>) -> Variable<I> {
         let prod = |values: &[F]| {
             assert_eq!(values.len(), 2);
 
             values[0] * values[1]
         };
 
-        AuxComputation::new(
-            vec![x.clone(), y.clone()],
-            Box::new(prod)
-        )
+        let symbolic_inputs = vec![x.clone(), y.clone()];
+        let compute = Box::new(prod);
+        self.allocate_aux(symbolic_inputs, compute)
     }
 }
 
@@ -431,31 +446,41 @@ mod tests {
 
     #[test]
     fn aux_compute_simple() {
-        let fake_lambda = |input: &[Fr]| {
+        let lc = vec![LC::sum2(12i64, 20i64)];
+        let lambda = |input: &[Fr]| {
             assert_eq!(input.len(), 1);
             input[0]
         };
-        let lc = vec![LC::sum2(12i64, 20i64)];
-        let aux = AuxComputation::<Fr, TestInputs>::new(lc, Box::new(fake_lambda));
+        let aux = AuxComputation::<Fr, TestInputs>::new(Variable::Auxiliary(0), lc, Box::new(lambda));
         let result = aux.compute(&[]);
         assert_eq!(result, Fr::from(32));
     }
 
     #[test]
     fn aux_compute_advanced() {
-        // (12 + 20) * (BytecodeA + Aux(0)) - 3 * Aux(1)
+        // (12 + 20) * (BytecodeA + PcIn) - 3 * PcOut
         let symbolic_inputs = vec![
             LC::sum2(12i64, 20i64), 
-            LC::sum2(TestInputs::BytecodeA, Variable::Auxiliary(0)),
-            (3 * Variable::Auxiliary(1)).into()
+            LC::sum2(TestInputs::BytecodeA, TestInputs::PcIn),
+            (3 * TestInputs::PcOut).into()
         ];
-        let fake_lambda = |input: &[Fr]| {
+        let lambda = |input: &[Fr]| {
             assert_eq!(input.len(), 3);
             input[0] * input[1] - input[2]
         };
-        let aux = AuxComputation::<Fr, TestInputs>::new(symbolic_inputs, Box::new(fake_lambda));
+        let aux = AuxComputation::<Fr, TestInputs>::new(Variable::Auxiliary(0), symbolic_inputs, Box::new(lambda));
         let result = aux.compute(&[Fr::from(5), Fr::from(10), Fr::from(7)]);
         assert_eq!(result, Fr::from((12 + 20) * (5 + 10) - (3 * 7)));
+    }
+
+    #[test]
+    #[should_panic]
+    fn aux_compute_depends_on_aux() {
+        let lc = vec![LC::sum2(12i64, Variable::Auxiliary(1))];
+        let lambda = |_input: &[Fr]| {
+            unimplemented!()
+        };
+        let _aux = AuxComputation::<Fr, TestInputs>::new(Variable::Auxiliary(0), lc, Box::new(lambda));
     }
 
     #[test]
@@ -913,10 +938,15 @@ mod tests {
         let jolt_constraints = JoltConstraints();
         jolt_constraints.build_constraints(&mut builder);
 
-        // TODO(sragss): Start filling out a test here.
+        let mut z = vec![Fr::zero(); builder.witness_size()];
 
+        // Compute aux
+        for aux in &builder.aux_computations {
+            // TODO(sragss): Detect when an aux computation depends on another and panic. Not yet implemented.
 
-        todo!()
+            let required_z_values: Vec<Fr> = aux.flat_vars.iter().map(|var| z[builder.witness_index(var.clone())]).collect();
+            z[builder.witness_index(aux.output)] = aux.compute(&required_z_values);
+        }
     }
 }
 

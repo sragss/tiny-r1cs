@@ -83,7 +83,8 @@ fn from_i64<F: JoltField>(val: i64) -> F {
     if val > 0 {
         F::from_u64(val as u64).unwrap()
     } else {
-        unimplemented!()
+        // TODO(sragss): THIS DOESN'T WORK FOR BINIUS
+        F::zero() - F::from_u64(-(val) as u64).unwrap()
     }
 }
 
@@ -319,58 +320,8 @@ macro_rules! enum_range {
 }
 
 /// ```rust
-/// use tiny_r1cs::enum_range_wrap;
-/// 
-/// #[derive(Debug, PartialEq, Clone, Copy)]
-/// #[repr(usize)]
-/// pub enum Ex {
-///     A,
-///     B,
-///     C,
-///     D
-/// }
-/// 
-/// #[derive(Debug, PartialEq, Clone, Copy)]
-/// pub struct Wrapper<I>(I);
-/// 
-/// let range = enum_range_wrap!(Wrapper, Ex::B, Ex::D);
-/// assert_eq!(range, [Wrapper(Ex::B), Wrapper(Ex::C), Wrapper(Ex::D)]);
-/// 
-/// #[derive(Debug, PartialEq, Clone, Copy)]
-/// pub enum WrapperEnum<I> {
-///     A(I),
-///     B(I)
-/// }
-/// 
-/// let range = enum_range_wrap!(WrapperEnum::A, Ex::B, Ex::D);
-/// assert_eq!(range, [WrapperEnum::A(Ex::B), WrapperEnum::A(Ex::C), WrapperEnum::A(Ex::D)]);
-/// ```
-#[macro_export]
-macro_rules! enum_range_wrap {
-    ($InputWrapper:ident, $start:path, $end:path) => {
-        {
-            let mut arr = [$InputWrapper($start); ($end as usize) - ($start as usize) + 1];
-            for i in ($start as usize)..=($end as usize) {
-                arr[i - ($start as usize)] = $InputWrapper(unsafe { std::mem::transmute::<usize, _>(i) });
-            }
-            arr
-        }
-    };
-    ($InputWrapper:ident::$Variant:ident, $start:path, $end:path) => {
-        {
-            let mut arr = [$InputWrapper::$Variant($start); ($end as usize) - ($start as usize) + 1];
-            for i in ($start as usize)..=($end as usize) {
-                arr[i - ($start as usize)] = $InputWrapper::$Variant(unsafe { std::mem::transmute::<usize, _>(i) });
-            }
-            arr
-        }
-    };
-}
-
-/// ```rust
-/// use tiny_r1cs::input_range;
-/// # use tiny_r1cs::enum_input_range;
-/// # use tiny_r1cs::ops::{R1CSInputType, Variable};
+/// use tiny_r1cs::{input_range};
+/// # use tiny_r1cs::ops::{ConstraintInput, Variable};
 /// # use strum_macros::{EnumCount, EnumIter};
 /// 
 /// # #[derive(Clone, Copy, Debug, PartialEq, EnumCount, EnumIter)]
@@ -388,7 +339,7 @@ macro_rules! enum_range_wrap {
 /// #   }
 /// # }
 /// #
-/// impl R1CSInputType for Inputs {};
+/// impl ConstraintInput for Inputs {};
 /// 
 /// let range = input_range!(Inputs::B, Inputs::D);
 /// let expected_range = [Variable::Input(Inputs::B), Variable::Input(Inputs::C), Variable::Input(Inputs::D)];
@@ -397,9 +348,21 @@ macro_rules! enum_range_wrap {
 #[macro_export]
 macro_rules! input_range {
     ($start:path, $end:path) => {
-        crate::enum_range_wrap!(Variable::Input, $start, $end)
+        {
+            let mut arr = [Variable::Input($start); ($end as usize) - ($start as usize) + 1];
+            for i in ($start as usize)..=($end as usize) {
+                arr[i - ($start as usize)] = Variable::Input(unsafe { std::mem::transmute::<usize, _>(i) });
+            }
+            arr
+        }
     };
-    ($Variant:ident, $start:path, $end:path) => {
-        crate::enum_range_wrap!(Variable::Input::$Variant, $start, $end)
+    ($start:path, $end:path) => {
+        {
+            let mut arr = [Variable::Input($start); ($end as usize) - ($start as usize) + 1];
+            for i in ($start as usize)..=($end as usize) {
+                arr[i - ($start as usize)] = Variable::Input(unsafe { std::mem::transmute::<usize, _>(i) });
+            }
+            arr
+        }
     };
 }
