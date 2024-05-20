@@ -2,10 +2,11 @@
 /// A LinearCombination is a vector of Terms, where each Term is a pair of a Variable and a coefficient.
  
 use std::fmt::Debug;
+use jolt_core::poly::field::JoltField;
 use strum::{EnumCount, IntoEnumIterator};
 
 
-pub trait ConstraintInput: Clone + Copy + Debug + PartialEq + IntoEnumIterator + EnumCount + Into<usize> {}
+pub trait ConstraintInput: Clone + Copy + Debug + PartialEq + IntoEnumIterator + EnumCount + Into<usize> + 'static {}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Variable<I: ConstraintInput> {
@@ -38,6 +39,10 @@ impl<I: ConstraintInput> LC<I> {
         self.0.len()
     }
 
+    pub fn num_vars(&self) -> usize {
+        self.0.iter().filter(|term| matches!(term.0, Variable::Auxiliary(_) | Variable::Input(_))).count()
+    }
+
     /// LC(a) + LC(b) -> LC(a + b)
     pub fn sum2(a: impl Into<Term<I>>, b: impl Into<Term<I>>) -> Self {
         LC(vec![a.into(), b.into()])
@@ -49,6 +54,36 @@ impl<I: ConstraintInput> LC<I> {
         let b: LC<I> = b.into();
 
         a - b
+    }
+
+    pub fn evaluate<F: JoltField>(&self, values: &[F]) -> F {
+        let num_vars = self.num_vars();
+        assert_eq!(num_vars, values.len());
+
+        let mut var_index = 0;
+        let mut result = F::zero();
+        for (term_index, term) in self.terms().iter().enumerate() {
+            match term.0 {
+                Variable::Input(_) => {
+                    result += values[var_index] * from_i64::<F>(term.1);
+                    var_index += 1;
+                },
+                Variable::Auxiliary(_) => {
+                    result += values[term_index] * from_i64::<F>(term.1);
+                    var_index += 1;
+                },
+                Variable::Constant => result += from_i64::<F>(term.1),
+            }
+        }
+        result
+    }
+}
+
+fn from_i64<F: JoltField>(val: i64) -> F {
+    if val > 0 {
+        F::from_u64(val as u64).unwrap()
+    } else {
+        unimplemented!()
     }
 }
 

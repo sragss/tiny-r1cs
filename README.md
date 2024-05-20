@@ -3,3 +3,21 @@
 
 Known issues:
 - Linear combinations do not auto validate or combine like terms
+
+
+```rust
+#[derive(EnumIter, EnumCount, Clone, Copy, Debug, PartialEq)]
+#[repr(usize)]
+enum InputConfigPrimeField {
+    PcIn,
+    PcOut,
+    BytecodeA,
+    BytecodeVOpcode,
+    BytecodeVRs1,
+    BytecodeVRs2,
+    BytecodeVRd,
+    BytecodeVImm
+}
+impl ConstraintInput for InputConfigPrimeField {}
+impl_r1cs_input_lc_conversions!(InputConfigPrimeField);
+```
