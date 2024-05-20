@@ -1,12 +1,8 @@
-use std::{marker::PhantomData, ops::Range};
+use std::ops::Range;
 use std::fmt::Debug;
-use strum::{EnumCount, IntoEnumIterator};
-use strum_macros::{EnumCount, EnumIter};
 use jolt_core::poly::field::JoltField;
 
-use crate::{impl_r1cs_input_lc_conversions, ops::{ConstraintInput, Term, Variable, LC}};
-
-
+use crate::ops::{ConstraintInput, Term, Variable, LC};
 
 
 /// Constraints over a single row. Each variable points to a single item in Z and the corresponding coefficient.
@@ -76,28 +72,6 @@ impl<F: JoltField, I: ConstraintInput> AuxComputation<F, I> {
     }
 }
 
-impl<I: ConstraintInput> Constraint<I> {
-    // pub fn eq(left: Variable<I>, right: Variable<I>) -> Self {
-    //     // (left - right) * right = 0
-    //     Self {
-    //         a: Term(left, 1) - Term(right, 1),
-    //         b: LC(vec![Term(Variable::Constant, 1)]),
-    //         c: LC(vec![])
-    //     }
-    // }
-
-    // pub fn binary(var: Variable<I>) -> Self {
-    //     // var * (1 - var)
-    //     Self {
-    //         a: LC(vec![Term(var, 1)]),
-    //         b: LC(vec![Term(var, -1), Term(Variable::Constant, 1)]),
-    //         c: LC(vec![])
-    //     }
-    // }
-}
-
-
-
 
 
 
@@ -112,8 +86,6 @@ struct R1CSBuilder<F: JoltField, I: ConstraintInput> {
     constraints: Vec<Constraint<I>>,
     next_aux: usize,
     aux_computations: Vec<AuxComputation<F, I>>,
-    // compute_aux_funcs: Vec<Box<dyn Fn() -> Vec<F>>>,
-    _marker: PhantomData<(F, I)>
 }
 
 impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
@@ -122,7 +94,6 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
             constraints: vec![],
             next_aux: 0,
             aux_computations: vec![],
-            _marker: PhantomData
         }
     }
 
@@ -368,6 +339,7 @@ mod tests {
 
     use super::*;
     use ark_bn254::Fr;
+    use strum::EnumCount;
 
     fn constraint_is_sat<I: ConstraintInput>(constraint: &Constraint<I>, inputs: &Vec<i64>) -> bool {
         // Find the number of variables and the number of aux. Inputs should be equal to this combined length
@@ -430,7 +402,7 @@ mod tests {
     // }
 
     #[allow(non_camel_case_types)]
-    #[derive(EnumIter, EnumCount, Clone, Copy, Debug, PartialEq)]
+    #[derive(strum_macros::EnumIter, strum_macros::EnumCount, Clone, Copy, Debug, PartialEq)]
     #[repr(usize)]
     enum TestInputs {
         PcIn,
@@ -780,7 +752,7 @@ mod tests {
     }
 
     #[allow(non_camel_case_types)]
-    #[derive(EnumIter, EnumCount, Clone, Copy, Debug, PartialEq)]
+    #[derive(strum_macros::EnumIter, strum_macros::EnumCount, Clone, Copy, Debug, PartialEq)]
     #[repr(usize)]
     enum JoltInputs {
         PcIn,
@@ -940,6 +912,9 @@ mod tests {
 
         let jolt_constraints = JoltConstraints();
         jolt_constraints.build_constraints(&mut builder);
+
+        // TODO(sragss): Start filling out a test here.
+
 
         todo!()
     }
