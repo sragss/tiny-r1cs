@@ -5,7 +5,6 @@ use enum_dispatch::enum_dispatch;
 use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-
 pub trait R1CSInputType: Clone + Copy + IntoEnumIterator {}
 
 #[derive(Clone, Copy, Debug)]
@@ -21,7 +20,7 @@ enum Metavariable<I: R1CSInputType> {
     Single(Variable<I>),
     Double(Variable<I>, Variable<I>),
     Triple(Variable<I>, Variable<I>, Variable<I>),
-    Quad  (Variable<I>, Variable<I>, Variable<I>, Variable<I>)
+    Quad(Variable<I>, Variable<I>, Variable<I>, Variable<I>),
 }
 
 // TODO(sragss): Could use to share aux.
@@ -41,7 +40,7 @@ impl<I: R1CSInputType> Constraint<I> {
         Self {
             a: vec![(left, 1), (right, -1)],
             b: vec![(right, 1)],
-            c: vec![]
+            c: vec![],
         }
     }
 
@@ -50,11 +49,15 @@ impl<I: R1CSInputType> Constraint<I> {
         Self {
             a: vec![(var, 1)],
             b: vec![(var, -1), (Variable::Constant, 1)],
-            c: vec![]
+            c: vec![],
         }
     }
 
-    pub fn if_else(condition: Variable<I>, true_outcome: Variable<I>, false_outcome: Variable<I>) -> (Self, Variable<I>) {
+    pub fn if_else(
+        condition: Variable<I>,
+        true_outcome: Variable<I>,
+        false_outcome: Variable<I>,
+    ) -> (Self, Variable<I>) {
         // result = condition * true_coutcome + (1 - condition) * false_outcome
         // => condition * (true_outcome - false_outcome) = (result - false_outcome)
 
@@ -71,12 +74,11 @@ impl<I: R1CSInputType> Constraint<I> {
         let constraint = Self {
             a: vec![(condition, 1)],
             b: vec![(true_outcome, 1), (false_outcome, -1)],
-            c: vec![(condition, 1), (result, -1)]
+            c: vec![(condition, 1), (result, -1)],
         };
         (constraint, result)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -91,23 +93,33 @@ mod tests {
 
     impl R1CSInputType for TestInputs {}
 
-    fn check_sat(constraint: &Constraint<TestInputs>, input_a: i64, input_b: i64, input_c: i64) -> bool {
+    fn check_sat(
+        constraint: &Constraint<TestInputs>,
+        input_a: i64,
+        input_b: i64,
+        input_c: i64,
+    ) -> bool {
         let mut a = 0;
         let mut b = 0;
         let mut c = 0;
-        for (matrix_index, constraint) in [constraint.a.clone(), constraint.b.clone(), constraint.c.clone()].iter().enumerate() {
+        for (matrix_index, constraint) in [
+            constraint.a.clone(),
+            constraint.b.clone(),
+            constraint.c.clone(),
+        ]
+        .iter()
+        .enumerate()
+        {
             for (var, value) in constraint {
                 let variable_value: i64 = match var {
-                    Variable::Input(input) => {
-                        match input {
-                            TestInputs::InputA => input_a,
-                            TestInputs::InputB => input_b,
-                            TestInputs::InputC => input_c,
-                            _ => panic!("shouldn't happen")
-                        }
+                    Variable::Input(input) => match input {
+                        TestInputs::InputA => input_a,
+                        TestInputs::InputB => input_b,
+                        TestInputs::InputC => input_c,
+                        _ => panic!("shouldn't happen"),
                     },
                     Variable::Constant => 1,
-                    _ => panic!("shouldn't happen")
+                    _ => panic!("shouldn't happen"),
                 };
                 if matrix_index == 0 {
                     a += variable_value * value;
@@ -119,7 +131,7 @@ mod tests {
             }
         }
         println!("a * b == c      {a} * {b} == {c}");
-        a*b == c
+        a * b == c
     }
 
     #[test]
@@ -129,7 +141,6 @@ mod tests {
         let constraint = Constraint::eq(left, right);
         assert!(check_sat(&constraint, 12, 12, 0));
         assert!(!check_sat(&constraint, 12, 20, 0));
-
     }
 
     #[test]
@@ -155,9 +166,6 @@ mod tests {
     }
 }
 
-
-
-
 #[derive(EnumIter, Clone, Copy)]
 enum InputConfigPrimeField {
     PcIn,
@@ -167,14 +175,14 @@ enum InputConfigPrimeField {
     BytecodeVRs1,
     BytecodeVRs2,
     BytecodeVRd,
-    BytecodeVImm
+    BytecodeVImm,
 }
 impl R1CSInputType for InputConfigPrimeField {}
 
 #[derive(EnumIter, Clone, Copy)]
 enum InputConfigTowerField {
     PcIn,
-    PcOut
+    PcOut,
 }
 impl R1CSInputType for InputConfigTowerField {}
 
@@ -196,11 +204,11 @@ impl<I: R1CSInputType> LinearCombination<I> {
 }
 
 trait LinearCombo<I: R1CSInputType> {
-	fn into_linear_combo(self) -> Vec<(Variable<I>, i64)>;
+    fn into_linear_combo(self) -> Vec<(Variable<I>, i64)>;
 }
 
 impl<I: R1CSInputType> LinearCombo<I> for Variable<I> {
-	fn into_linear_combo(self) -> Vec<(Variable<I>, i64)> {
+    fn into_linear_combo(self) -> Vec<(Variable<I>, i64)> {
         vec![(self, 1)]
     }
 }
@@ -265,15 +273,14 @@ impl Into<LinearCombination<InputConfigPrimeField>> for InputConfigPrimeField {
     }
 }
 
-
-
 struct FakeConstraintSubset();
 impl<F: PrimeField> R1CSConstraintSubset<F> for FakeConstraintSubset {
     type Inputs = InputConfigPrimeField;
     fn constraints(&self) -> Vec<Constraint<Self::Inputs>> {
-        vec![
-            Constraint::eq(Variable::Input(InputConfigPrimeField::BytecodeA), Variable::Input(InputConfigPrimeField::BytecodeVImm))
-        ]
+        vec![Constraint::eq(
+            Variable::Input(InputConfigPrimeField::BytecodeA),
+            Variable::Input(InputConfigPrimeField::BytecodeVImm),
+        )]
     }
     fn compute_aux(&self) -> Vec<F> {
         vec![]
@@ -302,7 +309,7 @@ impl<F: PrimeField> R1CSConstraintSubset<F> for FakeTowerConstraintSubset {
 // #[enum_dispatch(JoltInstruction)]
 pub enum RV32IPrimeField {
     ADD(AddInstruction),
-    SUB(SubInstruction)
+    SUB(SubInstruction),
 }
 
 #[derive(Clone, Default)]
@@ -365,7 +372,6 @@ impl<F: PrimeField> R1CSConstraintSubset<F> for SubInstructionTowerFieldConsrain
 // - How does this actually work with PrimeField / TowerField (wrappers?)
 // - Cleanliness of wiring the Inputs associated type
 // - Can I restrict JoltInstruction to ensure that it has implemented the R1CSConstraintSubset trait
-
 
 fn main() {
     // let mut builder = R1CSBuilder::<ark_bn254::Fr, InputConfigPrimeField>::new();

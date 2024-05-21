@@ -1,12 +1,13 @@
+use jolt_core::poly::field::JoltField;
 /// Defines the Linear Combination (LC) object and associated operations.
 /// A LinearCombination is a vector of Terms, where each Term is a pair of a Variable and a coefficient.
- 
 use std::fmt::Debug;
-use jolt_core::poly::field::JoltField;
 use strum::{EnumCount, IntoEnumIterator};
 
-
-pub trait ConstraintInput: Clone + Copy + Debug + PartialEq + IntoEnumIterator + EnumCount + Into<usize> + 'static {}
+pub trait ConstraintInput:
+    Clone + Copy + Debug + PartialEq + IntoEnumIterator + EnumCount + Into<usize> + 'static
+{
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Variable<I: ConstraintInput> {
@@ -40,7 +41,10 @@ impl<I: ConstraintInput> LC<I> {
     }
 
     pub fn num_vars(&self) -> usize {
-        self.0.iter().filter(|term| matches!(term.0, Variable::Auxiliary(_) | Variable::Input(_))).count()
+        self.0
+            .iter()
+            .filter(|term| matches!(term.0, Variable::Auxiliary(_) | Variable::Input(_)))
+            .count()
     }
 
     /// LC(a) + LC(b) -> LC(a + b)
@@ -67,11 +71,11 @@ impl<I: ConstraintInput> LC<I> {
                 Variable::Input(_) => {
                     result += values[var_index] * from_i64::<F>(term.1);
                     var_index += 1;
-                },
+                }
                 Variable::Auxiliary(_) => {
                     result += values[term_index] * from_i64::<F>(term.1);
                     var_index += 1;
-                },
+                }
                 Variable::Constant => result += from_i64::<F>(term.1),
             }
         }
@@ -88,7 +92,6 @@ pub fn from_i64<F: JoltField>(val: i64) -> F {
         F::zero() - F::from_u64(-(val) as u64).unwrap()
     }
 }
-
 
 // Arithmetic for LC
 
@@ -120,7 +123,6 @@ impl<I: ConstraintInput> std::ops::Sub for LC<I> {
         LC(combined_terms)
     }
 }
-
 
 // Arithmetic for Term<I>
 
@@ -181,7 +183,6 @@ impl<I: ConstraintInput> std::ops::Sub for Variable<I> {
     }
 }
 
-
 // Into<LC<I>>
 
 impl<I: ConstraintInput> Into<LC<I>> for i64 {
@@ -208,7 +209,6 @@ impl<I: ConstraintInput> Into<LC<I>> for Vec<Term<I>> {
     }
 }
 
-
 // Generic arithmetic for Variable<I>
 
 impl<I: ConstraintInput> std::ops::Mul<i64> for Variable<I> {
@@ -226,7 +226,6 @@ impl<I: ConstraintInput> std::ops::Mul<Variable<I>> for i64 {
         Term(other, self)
     }
 }
-
 
 /// Conversions and arithmetic for concrete ConstraintInput
 #[macro_export]
@@ -288,7 +287,6 @@ macro_rules! impl_r1cs_input_lc_conversions {
                 Term(Variable::Input(rhs), self)
             }
         }
-        
     };
 }
 
@@ -302,29 +300,27 @@ macro_rules! impl_r1cs_input_lc_conversions {
 ///     C,
 ///     D
 /// }
-/// 
-/// 
+///
+///
 /// let range = enum_range!(Ex::B, Ex::D);
 /// assert_eq!(range, [Ex::B, Ex::C, Ex::D]);
 /// ```
 #[macro_export]
 macro_rules! enum_range {
-    ($start:path, $end:path) => {
-        {
-            let mut arr = [$start; ($end as usize) - ($start as usize) + 1];
-            for i in ($start as usize)..=($end as usize) {
-                arr[i - ($start as usize)] = unsafe { std::mem::transmute::<usize, _>(i) };
-            }
-            arr
+    ($start:path, $end:path) => {{
+        let mut arr = [$start; ($end as usize) - ($start as usize) + 1];
+        for i in ($start as usize)..=($end as usize) {
+            arr[i - ($start as usize)] = unsafe { std::mem::transmute::<usize, _>(i) };
         }
-    };
+        arr
+    }};
 }
 
 /// ```rust
 /// use tiny_r1cs::{input_range};
 /// # use tiny_r1cs::ops::{ConstraintInput, Variable};
 /// # use strum_macros::{EnumCount, EnumIter};
-/// 
+///
 /// # #[derive(Clone, Copy, Debug, PartialEq, EnumCount, EnumIter)]
 /// #[repr(usize)]
 /// pub enum Inputs {
@@ -341,29 +337,27 @@ macro_rules! enum_range {
 /// # }
 /// #
 /// impl ConstraintInput for Inputs {};
-/// 
+///
 /// let range = input_range!(Inputs::B, Inputs::D);
 /// let expected_range = [Variable::Input(Inputs::B), Variable::Input(Inputs::C), Variable::Input(Inputs::D)];
 /// assert_eq!(range, expected_range);
 /// ```
 #[macro_export]
 macro_rules! input_range {
-    ($start:path, $end:path) => {
-        {
-            let mut arr = [Variable::Input($start); ($end as usize) - ($start as usize) + 1];
-            for i in ($start as usize)..=($end as usize) {
-                arr[i - ($start as usize)] = Variable::Input(unsafe { std::mem::transmute::<usize, _>(i) });
-            }
-            arr
+    ($start:path, $end:path) => {{
+        let mut arr = [Variable::Input($start); ($end as usize) - ($start as usize) + 1];
+        for i in ($start as usize)..=($end as usize) {
+            arr[i - ($start as usize)] =
+                Variable::Input(unsafe { std::mem::transmute::<usize, _>(i) });
         }
-    };
-    ($start:path, $end:path) => {
-        {
-            let mut arr = [Variable::Input($start); ($end as usize) - ($start as usize) + 1];
-            for i in ($start as usize)..=($end as usize) {
-                arr[i - ($start as usize)] = Variable::Input(unsafe { std::mem::transmute::<usize, _>(i) });
-            }
-            arr
+        arr
+    }};
+    ($start:path, $end:path) => {{
+        let mut arr = [Variable::Input($start); ($end as usize) - ($start as usize) + 1];
+        for i in ($start as usize)..=($end as usize) {
+            arr[i - ($start as usize)] =
+                Variable::Input(unsafe { std::mem::transmute::<usize, _>(i) });
         }
-    };
+        arr
+    }};
 }

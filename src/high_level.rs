@@ -2,8 +2,6 @@ use ark_ff::PrimeField;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumCount, EnumIter};
 
-
-
 pub trait R1CSInputType: Clone + Copy + IntoEnumIterator {}
 
 #[derive(EnumIter, Clone, Copy)]
@@ -15,23 +13,16 @@ enum InputConfigPrimeField {
     BytecodeVRs1,
     BytecodeVRs2,
     BytecodeVRd,
-    BytecodeVImm
+    BytecodeVImm,
 }
 impl R1CSInputType for InputConfigPrimeField {}
-
 
 #[derive(EnumIter, Clone, Copy)]
 enum InputConfigTowerField {
     PcIn,
-    PcOut
+    PcOut,
 }
 impl R1CSInputType for InputConfigTowerField {}
-
-
-
-
-
-
 
 #[derive(Clone, Copy, Debug)]
 enum Variable<I: R1CSInputType> {
@@ -44,11 +35,6 @@ struct Constraint<I: R1CSInputType> {
     b: Vec<(Variable<I>, i64)>,
     c: Vec<(Variable<I>, i64)>,
 }
-
-
-
-
-
 
 trait R1CSConstraintSubset<F> {
     type Inputs: R1CSInputType;
@@ -80,7 +66,7 @@ impl<F: PrimeField> R1CSConstraintSubset<F> for FakeTowerConstraintSubset {
 // #[enum_dispatch(JoltInstruction)]
 pub enum RV32IPrimeField {
     ADD(AddInstruction),
-    SUB(SubInstruction)
+    SUB(SubInstruction),
 }
 
 #[derive(Clone, Default)]

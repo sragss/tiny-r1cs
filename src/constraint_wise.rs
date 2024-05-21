@@ -1,9 +1,6 @@
 use strum::IntoEnumIterator;
 
-
-
 pub trait R1CSInputType: Clone + Copy + IntoEnumIterator {}
-
 
 #[derive(Clone, Copy, Debug)]
 enum Variable<I: R1CSInputType> {
@@ -24,7 +21,7 @@ impl<I: R1CSInputType> Constraint<I> {
         Self {
             a: vec![(left, 1), (right, -1)],
             b: vec![(Variable::Constant, 1)],
-            c: vec![]
+            c: vec![],
         }
     }
 
@@ -33,11 +30,15 @@ impl<I: R1CSInputType> Constraint<I> {
         Self {
             a: vec![(var, 1)],
             b: vec![(var, -1), (Variable::Constant, 1)],
-            c: vec![]
+            c: vec![],
         }
     }
 
-    pub fn if_else(condition: Variable<I>, true_outcome: Variable<I>, false_outcome: Variable<I>) -> (Self, Variable<I>) {
+    pub fn if_else(
+        condition: Variable<I>,
+        true_outcome: Variable<I>,
+        false_outcome: Variable<I>,
+    ) -> (Self, Variable<I>) {
         // result = condition * true_coutcome + (1 - condition) * false_outcome
         // result - false_outcome = condition * true_outcome - condition * false_outcome
         // => condition * (true_outcome - false_outcome) = (result - false_outcome)
@@ -55,12 +56,11 @@ impl<I: R1CSInputType> Constraint<I> {
         let constraint = Self {
             a: vec![(condition, 1)],
             b: vec![(true_outcome, 1), (false_outcome, -1)],
-            c: vec![(condition, 1), (result, -1)]
+            c: vec![(condition, 1), (result, -1)],
         };
         (constraint, result)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -77,23 +77,33 @@ mod tests {
 
     impl R1CSInputType for TestInputs {}
 
-    fn check_sat(constraint: &Constraint<TestInputs>, input_a: i64, input_b: i64, input_c: i64) -> bool {
+    fn check_sat(
+        constraint: &Constraint<TestInputs>,
+        input_a: i64,
+        input_b: i64,
+        input_c: i64,
+    ) -> bool {
         let mut a = 0;
         let mut b = 0;
         let mut c = 0;
-        for (matrix_index, constraint) in [constraint.a.clone(), constraint.b.clone(), constraint.c.clone()].iter().enumerate() {
+        for (matrix_index, constraint) in [
+            constraint.a.clone(),
+            constraint.b.clone(),
+            constraint.c.clone(),
+        ]
+        .iter()
+        .enumerate()
+        {
             for (var, value) in constraint {
                 let variable_value: i64 = match var {
-                    Variable::Input(input) => {
-                        match input {
-                            TestInputs::InputA => input_a,
-                            TestInputs::InputB => input_b,
-                            TestInputs::InputC => input_c,
-                            _ => panic!("shouldn't happen")
-                        }
+                    Variable::Input(input) => match input {
+                        TestInputs::InputA => input_a,
+                        TestInputs::InputB => input_b,
+                        TestInputs::InputC => input_c,
+                        _ => panic!("shouldn't happen"),
                     },
                     Variable::Constant => 1,
-                    _ => panic!("shouldn't happen")
+                    _ => panic!("shouldn't happen"),
                 };
                 if matrix_index == 0 {
                     a += variable_value * value;
@@ -105,7 +115,7 @@ mod tests {
             }
         }
         println!("a * b == c      {a} * {b} == {c}");
-        a*b == c
+        a * b == c
     }
 
     #[test]
@@ -115,7 +125,6 @@ mod tests {
         let constraint = Constraint::eq(left, right);
         assert!(check_sat(&constraint, 12, 12, 0));
         assert!(!check_sat(&constraint, 12, 20, 0));
-
     }
 
     #[test]
