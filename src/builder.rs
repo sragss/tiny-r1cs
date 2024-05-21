@@ -334,6 +334,7 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
     }
 
     // TODO(sragss): Everything up until here assumes the single R1CS paradigm then this goes to Uniform / Multi
+    // Could do R1CSBuilder -> UniformSpartanBuilder(uniform_constraints, offset_equality_constraints).{compute_aux, compute_spartan}
 
     /// inputs should be of the format [[I::0, I::0, ...], [I::1, I::1, ...], ... [I::N, I::N]]
     fn compute_aux(&self, inputs: &[Vec<F>]) -> Vec<Vec<F>> {
@@ -405,8 +406,8 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
             eval
         };
 
-        // 1. offset_equality_constraints: Xz[0..offset_constraint_rows]
-        // Az * 1 - Cz == 0
+        // 1. offset_equality_constraints: Xz[0..offset_eq_constraint_rows]
+        // Az * 1 == Cz
         for (constraint_index, constraint) in offset_equality_constraints.iter().enumerate() {
             // For offset equality constraints we only constrain 1..N steps, the first does not have recursive definition.
             for step_index in 0..(padded_trace_len - 1) {
@@ -417,7 +418,7 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
             }
         }
 
-        // 2. uniform_constraints: Xz[offset_constraint_rows..uniform_constraint_rows]
+        // 2. uniform_constraints: Xz[offset_eq_constraint_rows..uniform_constraint_rows]
         // TODO(sragss): Could either materialize then multiply or do it directly from the constraints. Should compare performance
         for (constraint_index, constraint) in self.constraints.iter().enumerate() {
             for step_index in 0..padded_trace_len {
@@ -502,17 +503,6 @@ mod tests {
 
         a * b == c
     }
-
-    // #[test]
-    // fn constraints() {
-    //     let eq_constraint = Constraint::eq(Variable::Input(TestInputs::PcIn), Variable::Input(TestInputs::PcOut));
-    //     let mut z = vec![0i64; TestInputs::COUNT];
-    //     z[TestInputs::PcIn as usize] = 1;
-    //     z[TestInputs::PcOut as usize] = 1;
-    //     assert!(constraint_is_sat(&eq_constraint, &z));
-    //     z[TestInputs::PcOut as usize] = 2;
-    //     assert!(!constraint_is_sat(&eq_constraint, &z));
-    // }
 
     #[allow(non_camel_case_types)]
     #[derive(strum_macros::EnumIter, strum_macros::EnumCount, Clone, Copy, Debug, PartialEq)]
