@@ -79,7 +79,8 @@ impl<I: ConstraintInput> LC<I> {
     }
 }
 
-fn from_i64<F: JoltField>(val: i64) -> F {
+// TODO(sragss): Move this onto JoltFiel
+pub fn from_i64<F: JoltField>(val: i64) -> F {
     if val > 0 {
         F::from_u64(val as u64).unwrap()
     } else {
