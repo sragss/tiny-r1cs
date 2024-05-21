@@ -119,11 +119,6 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
         new_aux
     }
 
-    // TODO(sragss): Likely have to remove this concept for non-uniform.
-    pub fn witness_size(&self) -> usize {
-        I::COUNT + self.next_aux + 1 // num vars + num_aux + 1 const
-    }
-
     /// Index of variable within z.
     pub fn witness_index(&self, var: impl Into<Variable<I>>) -> usize {
         let var: Variable<I> = var.into();
@@ -1158,7 +1153,6 @@ mod tests {
                 let rhs = JoltInputs::RAM_Write_RD;
                 cs.constrain_eq_conditional(rd_nonzero_and_jmp, lhs, rhs);
 
-
                 // TODO(sragss): PC incrementing constraints. Next PC: Check if it's a branch and the lookup output is 1. Check if it's a jump.
 
             }
@@ -1167,31 +1161,10 @@ mod tests {
         let jolt_constraints = JoltConstraints();
         jolt_constraints.build_constraints(&mut builder);
 
-        let mut z = vec![Fr::zero(); builder.witness_size()];
-
-        // Compute aux
-        for aux in &builder.aux_computations {
-            let required_z_values: Vec<Fr> = aux.flat_vars.iter().map(|var| z[builder.witness_index(var.clone())]).collect();
-            z[builder.witness_index(aux.output)] = aux.compute(&required_z_values);
-        }
-
-        // for constraint in constraints { constraint.build_constraints(&mut uniform_builder) }
-        // let aux = uniform_builder.compute_aux()
-        // let uniform_r1cs = uniform_builder.materialize()
-        // let (Az, Bz, Cz) = materialized.compute_spartan();
-
-        // let offset_equality_constraints = (JoltInputs::PcOut, JoltInputs::PcIn);
-        // let (Az, Bz, Cz) = uniform_builder.compute_spartan(cross_equality_constraints);
-        // fn compute_spartan(&self, offset_equality_constraints: Vec<(I, I)>) -> (Vec<F>, Vec<F>, Vec<F>) {
-
-        // }
-
-        struct CombinedR1CS<F: JoltField> {
-            // for each item in here, we allocate a row of Az, Bz, Cz
-            // issue is we need info from the non-materialized version
-            cross_equality: Vec<(JoltInputs, JoltInputs)>,
-            uniform: R1CSInstance<F>
-        }
+        let num_steps = 1;
+        let mut inputs = vec![vec![Fr::zero(); num_steps]; JoltInputs::COUNT];
+        let aux = builder.compute_aux(&inputs);
+        let (az, bz, cz) = builder.compute_spartan(&inputs, &aux, &vec![]);
     }
 }
 
