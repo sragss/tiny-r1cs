@@ -361,7 +361,7 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
 
     /// inputs should be of the format [[I::0, I::0, ...], [I::1, I::1, ...], ... [I::N, I::N]]
     /// aux should be of the format [[Aux(0), Aux(0)], ... [Aux(self.next_aux - 1), ...]]
-    fn compute_spartan(&self, inputs: &[Vec<F>], aux: &[Vec<F>], offset_equality_constraints: &[(I, I)]) -> (Vec<F>, Vec<F>, Vec<F>) {
+    fn compute_spartan(&self, inputs: &[Vec<F>], aux: &[Vec<F>], offset_equality_constraints: &[(LC<I>, LC<I>)]) -> (Vec<F>, Vec<F>, Vec<F>) {
         // TODO(sragss): Decide to handle aux before or during. Currently assumes inputs does not include aux.
         assert_eq!(inputs.len(), I::COUNT);
         let padded_trace_len = inputs[0].len();
@@ -374,7 +374,7 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
         // "rows in z"
         let offset_eq_constraint_rows = offset_equality_constraints.len() * (padded_trace_len - 1); // First step unconstrained
         let uniform_constraint_rows = padded_trace_len * self.constraints.len();
-        // let const_rows = 1; // TODO(sragss): Is this real chat?
+        // let const_rows = 1; // TODO(sragss): chat is this real?
 
         // let unpadded_spartan_vector_rows= offset_eq_constraint_rows + uniform_constraint_rows + const_rows;
         let unpadded_spartan_vector_rows= offset_eq_constraint_rows + uniform_constraint_rows;
@@ -385,18 +385,6 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
 
         // TODO(sragss): btw ~unpadded~
         let (mut Az, mut Bz, mut Cz) = (vec![F::zero(); unpadded_spartan_vector_rows], vec![F::zero(); unpadded_spartan_vector_rows], vec![F::zero(); unpadded_spartan_vector_rows]);
-
-        // 1. offset_equality_constraints: Xz[0..offset_constraint_rows]
-        // Az * 1 - Cz == 0
-        for (constraint_index, constraint) in offset_equality_constraints.iter().enumerate() {
-            // For offset equality constraints we only constrain 1..N steps, the first does not have recursive definition.
-            for step in 0..(padded_trace_len - 1) {
-                let index = constraint_index * padded_trace_len + step;
-                Az[index] = inputs[constraint.0.into()][step];
-                Bz[index] = F::one();
-                Cz[index] = inputs[constraint.1.into()][step + 1];
-            }
-        }
 
         let compute_lc= |lc: &LC<I>, inputs: &[Vec<F>], aux: &[Vec<F>], step_index: usize| {
             let mut eval = F::zero();
@@ -416,6 +404,18 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
             });
             eval
         };
+
+        // 1. offset_equality_constraints: Xz[0..offset_constraint_rows]
+        // Az * 1 - Cz == 0
+        for (constraint_index, constraint) in offset_equality_constraints.iter().enumerate() {
+            // For offset equality constraints we only constrain 1..N steps, the first does not have recursive definition.
+            for step_index in 0..(padded_trace_len - 1) {
+                let index = constraint_index * padded_trace_len + step_index;
+                Az[index] = compute_lc(&constraint.0, &inputs, &aux, step_index);
+                Bz[index] = F::one();
+                Cz[index] = compute_lc(&constraint.1, &inputs, &aux, step_index);
+            }
+        }
 
         // 2. uniform_constraints: Xz[offset_constraint_rows..uniform_constraint_rows]
         // TODO(sragss): Could either materialize then multiply or do it directly from the constraints. Should compare performance
@@ -985,21 +985,29 @@ mod tests {
         assert_eq!(builder.next_aux, 1);
 
         let num_steps = 2;
+
+        // OpFlags0[n] = OpFlags0[n + 1];
+        // PcIn[n] + 4 = PcIn[n + 1]
+        let non_uniform_constraints: Vec<(LC<TestInputs>, LC<TestInputs>)> = vec![
+            (TestInputs::OpFlags0.into(), TestInputs::OpFlags0.into()),
+            (LC::sum2(TestInputs::PcIn, 4), TestInputs::PcIn.into())
+        ];
+
         let mut inputs = vec![vec![Fr::zero(); num_steps]; TestInputs::COUNT];
         inputs[TestInputs::OpFlags0 as usize][0] = Fr::from(5);
         inputs[TestInputs::OpFlags1 as usize][0] = Fr::from(7);
+        inputs[TestInputs::PcIn as usize][0] = Fr::from(100);
         inputs[TestInputs::OpFlags0 as usize][1] = Fr::from(5);
         inputs[TestInputs::OpFlags1 as usize][1] = Fr::from(13);
+        inputs[TestInputs::PcIn as usize][1] = Fr::from(104);
         let aux = builder.compute_aux(&inputs);
         assert_eq!(aux, vec![vec![Fr::from(5 * 7), Fr::from(5 * 13)]]);
 
-        // OpFlags0[n] = OpFlags0[n + 1];
-        let non_uniform_constraints = vec![(TestInputs::OpFlags0, TestInputs::OpFlags0)];
 
         let (Az, Bz, Cz) = builder.compute_spartan(&inputs, &aux, &non_uniform_constraints);
-        assert_eq!(Az.len(), 3);
-        assert_eq!(Bz.len(), 3);
-        assert_eq!(Cz.len(), 3);
+        assert_eq!(Az.len(), 4);
+        assert_eq!(Bz.len(), 4);
+        assert_eq!(Cz.len(), 4);
 
         for ((a, b), c) in Az.iter().zip(Bz.iter()).zip(Cz.iter()) {
             assert_eq!(a * b, *c);
