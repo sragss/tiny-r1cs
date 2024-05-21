@@ -13,6 +13,58 @@ struct Constraint<I: ConstraintInput> {
     c: LC<I>,
 }
 
+impl<I: ConstraintInput> Constraint<I> {
+    #[cfg(test)]
+    fn is_sat(&self, inputs: &Vec<i64>) -> bool {
+        // Find the number of variables and the number of aux. Inputs should be equal to this combined length
+        let num_input=  I::COUNT;
+        let mut num_aux = 0;
+
+        let mut aux_set = std::collections::HashSet::new();
+        for constraint in [&self.a, &self.b, &self.c] {
+            for Term(var, _value) in constraint.terms() {
+                if let Variable::Auxiliary(aux) = var {
+                    aux_set.insert(aux);
+                }
+            }
+        }
+        num_aux = aux_set.len();
+        if aux_set.len() > 0 {
+            assert_eq!(num_aux, *aux_set.iter().max().unwrap() + 1); // Ensure there are no gaps
+        }
+        let aux_index = |aux_index: usize| num_input + aux_index;
+
+        let num_vars = num_input + num_aux;
+        assert_eq!(num_vars, inputs.len());
+
+        let mut a = 0;
+        let mut b = 0;
+        let mut c = 0;
+        let mut buckets = [&mut a, &mut b, &mut c];
+        let constraints = [&self.a, &self.b, &self.c];
+        for (bucket, constraint) in buckets.iter_mut().zip(constraints.iter()) {
+            for Term(var, coefficient) in constraint.terms() {
+                match var {
+                    Variable::Input(input) => {
+                        let in_u: usize = (*input).into();
+                        **bucket += inputs[in_u] * *coefficient;
+                    },
+                    Variable::Auxiliary(aux) => {
+                        **bucket += inputs[aux_index(*aux)] * *coefficient;
+                    },
+                    Variable::Constant => {
+                        **bucket += *coefficient;
+                    }
+                }
+            }
+        }
+
+        println!("a * b == c      {a} * {b} == {c}");
+
+        a * b == c
+    }
+}
+
 struct AuxComputation<F: JoltField, I: ConstraintInput> {
     output: Variable<I>,
     symbolic_inputs: Vec<LC<I>>,
@@ -464,54 +516,6 @@ mod tests {
     use ark_bn254::Fr;
     use strum::EnumCount;
 
-    fn constraint_is_sat<I: ConstraintInput>(constraint: &Constraint<I>, inputs: &Vec<i64>) -> bool {
-        // Find the number of variables and the number of aux. Inputs should be equal to this combined length
-        let num_input=  I::COUNT;
-        let mut num_aux = 0;
-
-        let mut aux_set = std::collections::HashSet::new();
-        for constraint in [&constraint.a, &constraint.b, &constraint.c] {
-            for Term(var, _value) in constraint.terms() {
-                if let Variable::Auxiliary(aux) = var {
-                    aux_set.insert(aux);
-                }
-            }
-        }
-        num_aux = aux_set.len();
-        if aux_set.len() > 0 {
-            assert_eq!(num_aux, *aux_set.iter().max().unwrap() + 1); // Ensure there are no gaps
-        }
-        let aux_index = |aux_index: usize| num_input + aux_index;
-
-        let num_vars = num_input + num_aux;
-        assert_eq!(num_vars, inputs.len());
-
-        let mut a = 0;
-        let mut b = 0;
-        let mut c = 0;
-        let mut buckets = [&mut a, &mut b, &mut c];
-        let constraints = [&constraint.a, &constraint.b, &constraint.c];
-        for (bucket, constraint) in buckets.iter_mut().zip(constraints.iter()) {
-            for Term(var, coefficient) in constraint.terms() {
-                match var {
-                    Variable::Input(input) => {
-                        let in_u: usize = (*input).into();
-                        **bucket += inputs[in_u] * *coefficient;
-                    },
-                    Variable::Auxiliary(aux) => {
-                        **bucket += inputs[aux_index(*aux)] * *coefficient;
-                    },
-                    Variable::Constant => {
-                        **bucket += *coefficient;
-                    }
-                }
-            }
-        }
-
-        println!("a * b == c      {a} * {b} == {c}");
-
-        a * b == c
-    }
 
     #[allow(non_camel_case_types)]
     #[derive(strum_macros::EnumIter, strum_macros::EnumCount, Clone, Copy, Debug, PartialEq)]
@@ -606,11 +610,11 @@ mod tests {
         z[TestInputs::PcOut as usize] = 6;
         z[TestInputs::BytecodeA as usize] = 6;
         z[TestInputs::BytecodeVOpcode as usize] = 1;
-        assert!(constraint_is_sat(&constraint, &z));
+        assert!(constraint.is_sat(&z));
 
         // 2 + 6 != 6 + 2*2
         z[TestInputs::BytecodeVOpcode as usize] = 2;
-        assert!(!constraint_is_sat(&constraint, &z));
+        assert!(!constraint.is_sat(&z));
     }
 
     #[test]
@@ -643,11 +647,11 @@ mod tests {
         z[TestInputs::BytecodeA as usize] = 6;
         z[TestInputs::BytecodeVRS1 as usize] = 6;
         z[TestInputs::BytecodeVRS2 as usize] = 10;
-        assert!(constraint_is_sat(&constraint, &z));
+        assert!(constraint.is_sat(&z));
         z[TestInputs::PcIn as usize] = 0;
-        assert!(!constraint_is_sat(&constraint, &z));
+        assert!(!constraint.is_sat(&z));
         z[TestInputs::BytecodeA as usize] = 10;
-        assert!(constraint_is_sat(&constraint, &z));
+        assert!(constraint.is_sat(&z));
     }
 
     #[test]
@@ -685,20 +689,20 @@ mod tests {
         z[TestInputs::BytecodeVRS2 as usize] = false_branch_result;
         z[TestInputs::BytecodeVImm as usize] =  true_branch_result;
         z[aux_index] = true_branch_result;
-        assert!(constraint_is_sat(&branch_constraint, &z));
-        assert!(constraint_is_sat(&eq_constraint, &z));
+        assert!(branch_constraint.is_sat(&z));
+        assert!(eq_constraint.is_sat(&z));
 
         z[aux_index] = false_branch_result;
-        assert!(!constraint_is_sat(&branch_constraint, &z));
-        assert!(!constraint_is_sat(&eq_constraint, &z));
+        assert!(!branch_constraint.is_sat(&z));
+        assert!(!eq_constraint.is_sat(&z));
 
         z[TestInputs::BytecodeVImm as usize] = false_branch_result;
-        assert!(!constraint_is_sat(&branch_constraint, &z));
-        assert!(constraint_is_sat(&eq_constraint, &z));
+        assert!(!branch_constraint.is_sat(&z));
+        assert!(eq_constraint.is_sat(&z));
 
         z[TestInputs::PcIn as usize] = 0;
-        assert!(constraint_is_sat(&branch_constraint, &z));
-        assert!(constraint_is_sat(&eq_constraint, &z));
+        assert!(branch_constraint.is_sat(&z));
+        assert!(eq_constraint.is_sat(&z));
 
         assert_eq!(builder.aux_computations.len(), 1);
         let compute_2 = builder.aux_computations[0].compute(&[Fr::one(), Fr::zero(), Fr::from(2), Fr::from(3)]);
@@ -738,7 +742,7 @@ mod tests {
         z[TestInputs::OpFlags3 as usize] = 1;
         z[TestInputs::BytecodeA as usize] = 13;
 
-        assert!(constraint_is_sat(&constraint, &z));
+        assert!(constraint.is_sat(&z));
     }
 
     #[test]
@@ -772,7 +776,7 @@ mod tests {
         let computed_aux = builder.aux_computations[0].compute(&vec![Fr::one(), Fr::zero(), Fr::one(), Fr::one()]);
         assert_eq!(computed_aux, Fr::from(13));
         z[builder.witness_index(Variable::Auxiliary(0))] = 13;
-        assert!(constraint_is_sat(&constraint, &z));
+        assert!(constraint.is_sat(&z));
     }
 
     #[test]
@@ -804,7 +808,7 @@ mod tests {
         z[TestInputs::OpFlags3 as usize] = 1;
         z[TestInputs::BytecodeA as usize] = 13;
 
-        assert!(constraint_is_sat(&constraint, &z));
+        assert!(constraint.is_sat(&z));
     }
 
     #[test]
@@ -832,17 +836,17 @@ mod tests {
         z[TestInputs::OpFlags0 as usize] = 7;
         z[TestInputs::OpFlags1 as usize] = 10;
         z[TestInputs::BytecodeA as usize] = 70;
-        assert!(constraint_is_sat(&builder.constraints[0], &z));
+        assert!(builder.constraints[0].is_sat(&z));
         z[TestInputs::BytecodeA as usize] = 71;
-        assert!(!constraint_is_sat(&builder.constraints[0], &z));
+        assert!(!builder.constraints[0].is_sat(&z));
 
         // x * y == aux
         z[TestInputs::OpFlags2 as usize] = 5;
         z[TestInputs::OpFlags3 as usize] = 7;
         z.push(35);
-        assert!(constraint_is_sat(&builder.constraints[1], &z));
+        assert!(builder.constraints[1].is_sat(&z));
         z[builder.witness_index(Variable::Auxiliary(0))] = 36;
-        assert!(!constraint_is_sat(&builder.constraints[1], &z));
+        assert!(!builder.constraints[1].is_sat(&z));
     }
 
     #[test]
@@ -868,9 +872,9 @@ mod tests {
         z[builder.witness_index(TestInputs::OpFlags1)] = 5;
         z[builder.witness_index(Variable::Auxiliary(0))] = 35;
 
-        assert!(constraint_is_sat(&builder.constraints[0], &z));
+        assert!(builder.constraints[0].is_sat(&z));
         z[builder.witness_index(Variable::Auxiliary(0))] = 36;
-        assert!(!constraint_is_sat(&builder.constraints[0], &z));
+        assert!(!builder.constraints[0].is_sat(&z));
     }
 
     #[test]
