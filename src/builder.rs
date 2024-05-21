@@ -358,7 +358,6 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
     /// inputs should be of the format [[I::0, I::0, ...], [I::1, I::1, ...], ... [I::N, I::N]]
     /// aux should be of the format [[Aux(0), Aux(0)], ... [Aux(self.next_aux - 1), ...]]
     fn compute_spartan(&self, inputs: &[Vec<F>], aux: &[Vec<F>], offset_equality_constraints: &[(LC<I>, LC<I>)]) -> (Vec<F>, Vec<F>, Vec<F>) {
-        // TODO(sragss): Decide to handle aux before or during. Currently assumes inputs does not include aux.
         assert_eq!(inputs.len(), I::COUNT);
         let padded_trace_len = inputs[0].len();
         inputs.iter().for_each(|inner_input| assert_eq!(inner_input.len(), padded_trace_len));
@@ -370,14 +369,12 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
         // "rows in z"
         let offset_eq_constraint_rows = offset_equality_constraints.len() * (padded_trace_len - 1); // First step unconstrained
         let uniform_constraint_rows = padded_trace_len * self.constraints.len();
+        
+        // TODO(sragss): Do I need to deal with constants?
         // let const_rows = 1; // TODO(sragss): chat is this real?
-
         // let unpadded_spartan_vector_rows= offset_eq_constraint_rows + uniform_constraint_rows + const_rows;
-        let unpadded_spartan_vector_rows= offset_eq_constraint_rows + uniform_constraint_rows;
 
-        // 1. offset_equality_constraints: Xz[0..offset_constraint_rows]
-        // 2. uniform_constraints: Xz[offset_constraint_rows..uniform_constraint_rows]
-        // 3. const
+        let unpadded_spartan_vector_rows= offset_eq_constraint_rows + uniform_constraint_rows;
 
         // TODO(sragss): btw ~unpadded~
         let (mut Az, mut Bz, mut Cz) = (vec![F::zero(); unpadded_spartan_vector_rows], vec![F::zero(); unpadded_spartan_vector_rows], vec![F::zero(); unpadded_spartan_vector_rows]);
@@ -421,17 +418,34 @@ impl<F: JoltField, I: ConstraintInput> R1CSBuilder<F, I> {
                 Az[z_index] = compute_lc(&constraint.a, &inputs, &aux, step_index);
                 Bz[z_index] = compute_lc(&constraint.b, &inputs, &aux, step_index);
                 Cz[z_index] = compute_lc(&constraint.c, &inputs, &aux, step_index);
-
-                // println!();
-                // println!("(constraint, step, z_index) ({}, {}, {})", constraint_index, step_index, z_index);
-                // println!("LC.a: {:?}", Az[z_index]);
-                // println!("LC.b: {:?}", Bz[z_index]);
-                // println!("LC.c: {:?}", Cz[z_index]);
             }
         }
 
 
         (Az, Bz, Cz)
+    }
+
+    #[cfg(test)]
+    fn assert_valid(&self, az: &[F], bz: &[F], cz: &[F], offset_equality_constraints: &[(LC<I>, LC<I>)], padded_trace_len: usize) {
+        let offset_eq_constraint_rows = (padded_trace_len - 1) * offset_equality_constraints.len();
+        let uniform_constraint_rows = padded_trace_len * self.constraints.len();
+
+        let len = az.len();
+        let expected_len = offset_eq_constraint_rows + uniform_constraint_rows;
+        assert_eq!(az.len(), expected_len);
+        assert_eq!(bz.len(), expected_len);
+        assert_eq!(cz.len(), expected_len);
+        for constraint_index in 0..len {
+            if az[constraint_index] * bz[constraint_index] != cz[constraint_index] {
+                let (uniform_constraint_index, step_index) = if constraint_index != 0 {
+                    (padded_trace_len / constraint_index, padded_trace_len % constraint_index)
+                } else {
+                    (0, 0)
+                };
+                panic!("Mismatch at global constraint {constraint_index} => {:?}\nuniform constraint: {uniform_constraint_index}\nstep: {step_index}", self.constraints[constraint_index]);
+
+            }
+        }
     }
 }
 
@@ -886,14 +900,12 @@ mod tests {
         let aux = builder.compute_aux(&inputs);
         assert_eq!(aux, vec![vec![Fr::from(5 * 7), Fr::from(11 * 13)]]);
 
-        let (Az, Bz, Cz) = builder.compute_spartan(&inputs, &aux, &vec![]);
-        assert_eq!(Az.len(), 2);
-        assert_eq!(Bz.len(), 2);
-        assert_eq!(Cz.len(), 2);
+        let (az, bz, cz) = builder.compute_spartan(&inputs, &aux, &vec![]);
+        assert_eq!(az.len(), 2);
+        assert_eq!(bz.len(), 2);
+        assert_eq!(cz.len(), 2);
 
-        for ((a, b), c) in Az.iter().zip(Bz.iter()).zip(Cz.iter()) {
-            assert_eq!(a * b, *c);
-        }
+        builder.assert_valid(&az, &bz, &cz, &vec![], num_steps);
     }
 
     #[test]
@@ -939,16 +951,12 @@ mod tests {
         let aux = builder.compute_aux(&inputs);
         assert_eq!(aux, vec![vec![Fr::from(35), Fr::from(49)], vec![Fr::from((4 * 10 + 2) * 5), Fr::from((4 * 10 + 2) * 7)]]);
 
-        let (Az, Bz, Cz) = builder.compute_spartan(&inputs, &aux, &vec![]);
-        assert_eq!(Az.len(), 4 * 2);
-        assert_eq!(Bz.len(), 4 * 2);
-        assert_eq!(Cz.len(), 4 * 2);
+        let (az, bz, cz) = builder.compute_spartan(&inputs, &aux, &vec![]);
+        assert_eq!(az.len(), 4 * 2);
+        assert_eq!(bz.len(), 4 * 2);
+        assert_eq!(cz.len(), 4 * 2);
 
-        let mut index = 0;
-        for ((a, b), c) in Az.iter().zip(Bz.iter()).zip(Cz.iter()) {
-            assert_eq!(a * b, *c);
-            index += 1;
-        }
+        builder.assert_valid(&az, &bz, &cz, &vec![], num_steps);
     }
 
     #[test]
@@ -989,14 +997,12 @@ mod tests {
         assert_eq!(aux, vec![vec![Fr::from(5 * 7), Fr::from(5 * 13)]]);
 
 
-        let (Az, Bz, Cz) = builder.compute_spartan(&inputs, &aux, &non_uniform_constraints);
-        assert_eq!(Az.len(), 4);
-        assert_eq!(Bz.len(), 4);
-        assert_eq!(Cz.len(), 4);
+        let (az, bz, cz) = builder.compute_spartan(&inputs, &aux, &non_uniform_constraints);
+        assert_eq!(az.len(), 4);
+        assert_eq!(bz.len(), 4);
+        assert_eq!(cz.len(), 4);
 
-        for ((a, b), c) in Az.iter().zip(Bz.iter()).zip(Cz.iter()) {
-            assert_eq!(a * b, *c);
-        }
+        builder.assert_valid(&az, &bz, &cz, &non_uniform_constraints, num_steps);
     }
 
 
@@ -1163,8 +1169,30 @@ mod tests {
 
         let num_steps = 1;
         let mut inputs = vec![vec![Fr::zero(); num_steps]; JoltInputs::COUNT];
+
+        // ADD instruction
+        inputs[JoltInputs::PcIn as usize][0] = Fr::from(10);
+        inputs[JoltInputs::Bytecode_A as usize][0] = Fr::from(10);
+        inputs[JoltInputs::Bytecode_Opcode as usize][0] = Fr::from(0);
+        inputs[JoltInputs::Bytecode_RS1 as usize][0] = Fr::from(2);
+        inputs[JoltInputs::Bytecode_RS2 as usize][0] = Fr::from(3);
+        inputs[JoltInputs::Bytecode_RD as usize][0] = Fr::from(4);
+
+        inputs[JoltInputs::RAM_Read_RD as usize][0] = Fr::from(0);
+        inputs[JoltInputs::RAM_Read_RS1 as usize][0] = Fr::from(100);
+        inputs[JoltInputs::RAM_Read_RS2 as usize][0] = Fr::from(200);
+        inputs[JoltInputs::RAM_Write_RD as usize][0] = Fr::from(300);
+        // remainder RAM == 0
+
+        // rv_trace::to_circuit_flags
+        // all zero for ADD
+        inputs[JoltInputs::OpFlags0 as usize][0] = Fr::zero(); // first_operand = rs1
+        inputs[JoltInputs::OpFlags1 as usize][0] = Fr::zero(); // second_operand = rs2 => immediate
+
         let aux = builder.compute_aux(&inputs);
         let (az, bz, cz) = builder.compute_spartan(&inputs, &aux, &vec![]);
+
+        builder.assert_valid(&az, &bz, &cz, &vec![], num_steps);
     }
 }
 
